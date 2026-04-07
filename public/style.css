@@ -1,0 +1,47 @@
+/*
+IF I WANT TO USE THIS:
+
+I need to add routing to the web server 
+to allow for accessing different resources 
+on the 'network'
+
+*/
+html {
+	scroll-behavior: smooth;
+	box-sizing: border-box;
+}
+
+*, *:before, *:after {
+	box-sizing: inherit;
+	margin: 0;
+	padding: 0;
+}
+
+:root {
+	--font-size: 1rem;
+
+	--background: dodgerblue;
+
+	--primary: white;
+	--secondary: black;
+
+}
+
+body {
+	background-color: var(--background);
+	font-size: var(--font-size);
+	color: var(--secondary);
+}
+
+h1 {}
+h2 {}
+h3 {}
+h4 {}
+h5 {}
+h6 {}
+
+p {}
+ul {}
+li {}
+
+
