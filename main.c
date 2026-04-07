@@ -207,7 +207,7 @@ void accept_tcp_connections(
 			"Content-Type: text/html\r\n"
 			// "Content-Length: %zu\r\n"
 			"Transfer-Encoding: chunked\r\n"
-			"Connection: keep-alive\r\n"
+			"Connection: close\r\n"
 			"\r\n"
 		);
 
@@ -260,7 +260,6 @@ typedef struct {
 	char *fy;
 } TCP_Options;
 
-// could have hints (h) be implementation defined!?
 void tcp_server(
 	char *port
 ) {
@@ -288,17 +287,13 @@ void tcp_server(
 	}
 	printf("TCP Connection listenning on port %s\n", port);
 	
-	accept_tcp_connections(sfd, (struct sockaddr*)&peer_addr, &peer_addrlen); // creates client_fd
+	accept_tcp_connections(sfd, (struct sockaddr*)&peer_addr, &peer_addrlen);
 }
 
 /* ########################## 
          YOU FOUND IT!
    ######################### */
 int main(int argc, char **argv) {
-
-	char *awesome[] = {"banana", "phone"};
-
-	faddlots("awesome.txt", 2, awesome);
 	
 	if (argc < 2) {
 		printf("Too few arguments.\n");
