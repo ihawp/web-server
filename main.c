@@ -4,7 +4,8 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <unistd.h>
-#include <pthread.h>
+#include <poll.h>
+// #include <pthread.h>
 
 #define CLIENT_BUF_SIZE 8000
 #define CHUNK_SIZE 512
@@ -94,6 +95,28 @@ void freelima(
 	arr->count = 0;
 	arr->capacity = 0;
 }
+
+/* ##########################
+       REQUEST OPERATIONS
+   ######################### */
+/*
+typedef struct {
+	LIMArray *headers;
+	char *request_method;
+	char *requested_file;
+} HTTPRequest;
+
+void freehttprequest(
+	HTTPRequest *httpr
+) {
+	freelima(HTTPRequest->headers);
+}
+
+typedef struct {
+	LIMArray *headers;
+	char *something_else;// like action? 
+} HTTPResponse;
+*/
 
 /* ##########################
        STRING OPERATIONS
@@ -272,6 +295,26 @@ int send_stream_file(
 	return 0;
 }
 
+void print_headers(
+	LIMArray *headers
+) {
+	size_t line_size = 128;
+	char header[line_size];
+	for (int i = 0; i < headers->count; i++) {
+		int size = snprintf(
+			header,
+			line_size,
+			"%.*s", 
+			(int) headers->pointer[i].count,
+			headers->pointer[i].pointer
+		);
+
+		printf("Size: %d\n", size);
+		printf("%s\n\n", header);
+	}
+}
+
+
 LIMArray parse_request_headers(
 	char *req
 ) {
@@ -284,7 +327,7 @@ LIMArray parse_request_headers(
 	
 		// Checks for \r\n (carriage return, newline)
 		if (s.string[i] == 0x0D && s.string[i + 1] == 0x0A) {
-			char *line_start = (i == 0) ? s.string : &s.string[last_line + 2];
+			char *line_start = (last_line == 0) ? s.string : &s.string[last_line + 2];
 			int count = (int)(s.string + i - line_start);
 			LineInMemory l = lim(
 				line_start,
@@ -306,11 +349,21 @@ char *recv_req_chunk(
 ) {
 	ssize_t nn_count = 0;
 	char *mmp = NULL;
+/*
+	struct pollfd fds[1];
+	fds[0].fd = *client_fd;
+	fds[0].events = POLLIN;
+	nfds_t nfds = 1;
 
-	// TODO: recv(...) blocking with cookie-blocking requests from client (igcognito and brave tabs sending this 4th/5th request)...nn eventually resolves to `0` the request ends and it prints Failed to receive request
-	// search for the header terminator
-	for (;;) {
-		ssize_t nn = recv(*client_fd, req + nn_count, CLIENT_BUF_SIZE - 1 - nn_count, 0);
+	if (poll(fds, nfds, 250) < 0) {
+		printf("Closed (%d) with poll(...)\n", *client_fd);
+		return NULL; 
+	}
+*/
+
+	// search for the terminator 2 now in theatres
+	for (;;) {   
+ 		ssize_t nn = recv(*client_fd, req + nn_count, CLIENT_BUF_SIZE - 1 - nn_count, 0);
 
 		// -1 or 0	
 		if (nn <= 0) return NULL;
@@ -342,26 +395,19 @@ void accept_tcp_connections(
 			continue;
 		}
 
+		// set a default timeout on the client sending bytes
 		setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-		// should be heap allocated
-		// create a http_req and http_res struct
-		// each should have a free_http_[x] method
+		// should be heap allocated (see HTTPRequest, HTTPResponse).
 		char req[CLIENT_BUF_SIZE];
-		
-		// rr is pointer to start of body, might be useless
-		printf("Start rr.\n");
 		char *rr = recv_req_chunk(&client_fd, req);
-		// not escaping on whatever this final request is that is made to the server
-		printf("End rr.\n");
 		if (rr == NULL) {
 			printf("Failed to receive request.\n");
 			send_json_response(&client_fd, 400, "{\"error\": \"Bad Request\"}");
 			continue;
 		}
 
-		printf("After rr.\n");
-
+		// start calling this headers
 		LIMArray lim_array = parse_request_headers(req);
 		if (lim_array.count == 0) {
 			printf("Failed to find any header info.\n");
@@ -369,6 +415,14 @@ void accept_tcp_connections(
 			freelima(&lim_array);
 			continue;
 		}
+
+		// create a split function, read lines
+		// into memory line by line and start building
+		// a http response block
+		print_headers(&lim_array);
+
+		// 0x2f = /
+		// memchr(0x2F);
 
 		// Do something with the headers.
 		freelima(&lim_array);
