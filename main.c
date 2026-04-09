@@ -99,19 +99,13 @@ void freelima(
 /* ##########################
        REQUEST OPERATIONS
    ######################### */
-/*
 typedef struct {
 	LIMArray *headers;
-	char *request_method;
-	char *requested_file;
+	char *method;
+	char *path;
 } HTTPRequest;
 
-void freehttprequest(
-	HTTPRequest *httpr
-) {
-	freelima(HTTPRequest->headers);
-}
-
+/*
 typedef struct {
 	LIMArray *headers;
 	char *something_else;// like action? 
@@ -131,6 +125,15 @@ StringView sv(char *string) {
 		.string = string,
 		.count = strlen(string) 
 	};
+}
+
+#define SV_fmt "%.*s\n"
+#define SV_arg(s) (int) (s)->count, (s)->string
+
+void print_sv_string(
+	StringView *sv_string
+) {
+	printf(SV_fmt, SV_arg(sv_string));
 }
 
 void remove_from_left(
@@ -177,6 +180,39 @@ void trim_by_delim(
 ) {
 	delim_from_left(sv, delim);
 	delim_from_right(sv, delim);
+}
+
+StringView split_by_delim(	
+	StringView *stv,
+	char delim
+) {
+	size_t i = 0;
+	while (i < stv->count && stv->string[i] != delim) {
+		i += 1;
+	}
+
+	if (i < stv->count) {
+		size_t size = 50;
+		char hi[size];
+		snprintf(
+			hi,
+			size,
+			SV_fmt,
+			(int) i,
+			stv->string
+		);
+
+		StringView item = {
+			.string = stv->string,
+			.count = i
+		};
+		remove_from_left(stv, i + 1);
+		return item;
+	}
+
+	StringView item = *stv;
+	remove_from_left(stv, stv->count);
+	return item;
 }
 
 /* ########################## 
@@ -300,6 +336,7 @@ void print_headers(
 ) {
 	size_t line_size = 128;
 	char header[line_size];
+	
 	for (int i = 0; i < headers->count; i++) {
 		int size = snprintf(
 			header,
@@ -309,11 +346,19 @@ void print_headers(
 			headers->pointer[i].pointer
 		);
 
-		printf("Size: %d\n", size);
-		printf("%s\n\n", header);
+		StringView svh = sv(header);
+
+		// 0x20: space
+		// 0x3A: :
+		StringView fsvh = split_by_delim(&svh, 0x20);
+		remove_from_right(&fsvh, 1);
+
+		// so now I just map what should be done with each header type, I will utilize curl or nodejs or something in regards to the response being made
+
+		print_sv_string(&svh);
+		print_sv_string(&fsvh);
 	}
 }
-
 
 LIMArray parse_request_headers(
 	char *req
@@ -446,13 +491,12 @@ int initiate_server(
 	}
 
 	for (rp = result; rp != NULL; rp = rp->ai_next) {
-		
 		*sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 		if (*sfd == -1) continue; // failed, try again
 
 		int bs = bind(*sfd, rp->ai_addr, rp->ai_addrlen);
 		if (bs == 0) break; // success, stop
-
+		
 		close(*sfd);
 	} 
 
@@ -466,7 +510,7 @@ int initiate_server(
 	return 0;
 }
 
-void tcp_server(
+int tcp_server(
 	char *port
 ) {
 	struct addrinfo h;
@@ -484,15 +528,15 @@ void tcp_server(
 	h.ai_next = NULL; // struct addrinfo
 
 	if (initiate_server(&h, &sfd, port) == -1)
-		exit(EXIT_FAILURE);
+		return -1;
 
 	// param 2 = backlog; ...how many requests can queue up before ECONNREFUSED or manual queueing.
 	if (listen(sfd, 50) == -1) {
 		printf("Failed to listen.\n");
-		exit(EXIT_FAILURE);
+		return -1;
 	}
-	printf("Server listening on port %s\n", port);
 	
+	printf("Server listening on port %s\n", port);
 	accept_tcp_connections(sfd, (struct sockaddr*)&peer_addr, &peer_addrlen);
 }
 
@@ -506,7 +550,9 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	tcp_server(argv[1]);
-	
+	if (tcp_server(argv[1]) == -1)
+		exit(EXIT_FAILURE);	
+
+	printf("Process exited cleanly!?");	
 	return 0;
 }
