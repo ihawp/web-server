@@ -20,8 +20,7 @@
 HTTP/1.1 Server
 
 TODO:
-- Stream client requests (and don't trust POST requests :()
-- Request header parsing
+- Request header parsing (in progress)
 - Routing
 - Custom headers per response
 
@@ -229,10 +228,13 @@ LIMArray parse_request_headers(
 		if (i + 1 >= s.count) break;
 		// Checks for \r\n (carriage return, newline)
 		if (s.string[i] == 0x0D && s.string[i + 1] == 0x0A) {
+			char *line_start = (i == 0) ? s.string : &s.string[last_line + 2];
+			int count = (int)(s.string + i - line_start);
 			LineInMemory l = lim(
-				&s.string[i],
-				i - last_line - 2 // 2 for \r\n?
+				line_start,
+				count
 			);
+			
 			arr_append(lim_array, l);
 			last_line = i;
 		}
@@ -294,33 +296,34 @@ void send_json_response(
 	close(*client_fd);
 }
 
-int recv_req(
+// Returns a pointer to the start of the body
+char *recv_req_chunk(
 	int *client_fd,
 	char *req
 ) {
 	ssize_t nn_count = 0;
+	char *mmp = NULL;
 
 	// search for the header terminator
 	for (;;) {
 		ssize_t nn = recv(*client_fd, req + nn_count, CLIENT_BUF_SIZE - 1 - nn_count, 0);
 		if (nn == -1) {
 			send_json_response(client_fd, 400, "{\"error\": \"bad request\"}");
-			return -1;
+			return NULL;
 		}
 		
 		if (nn == 0) {
 			close(*client_fd);
-			return -1;
+			return NULL;
 		}
 		
 		nn_count += nn;
-		char *mmp = memmem(req, nn_count, "\r\n\r\n", 4);
+		mmp = memmem(req, nn_count, "\r\n\r\n", 4);
 		if (mmp != NULL) break; // found the header terminator
 	}
 
 	req[nn_count] = '\0';
-
-	return (int) nn_count;
+	return mmp + 4; // pointer to start of body
 }
 
 void accept_tcp_connections(
@@ -334,23 +337,24 @@ void accept_tcp_connections(
 	// REQUEST / RESPONSE CYCLE
 	for (;;) {
 		int client_fd = accept(sfd, peer_addr, peer_addrlen);
-
 		if (client_fd == -1) {
 			printf("Failed to accept connection from client.\n");
 			continue;
 		}
 
-		// should loop
+		// should be heap allocated
+		// create a http_req and http_res struct
+		// each should have a free_http_[x] method
 		char req[CLIENT_BUF_SIZE];
-
-		int rr = recv_req(&client_fd, req);
-		if (rr == -1) {
+		
+		// rr is pointer to start of body, might be useless
+		char *rr = recv_req_chunk(&client_fd, req);
+		if (rr == NULL) {
 			printf("Failed to receive request.\n");
 			continue;
 		}
 
 		LIMArray lim_array = parse_request_headers(req);
-		
 		if (lim_array.count == 0) {
 			printf("Failed to find any header info.\n");
 			send_json_response(&client_fd, 400, "{\"error\": \"bad request\"}");
@@ -358,11 +362,8 @@ void accept_tcp_connections(
 			continue;
 		}
 
-		freelima(&lim_array);
-
-		// return generic index.html for all routes
-		send_stream_file(client_fd, "index.html");
-		
+		freelima(&lim_array); // free later, but free here for now
+		send_stream_file(client_fd, "index.html"); // return generic index.html for all routes for now
 		close(client_fd);
 	}
 }
@@ -377,7 +378,6 @@ int initiate_server(
 	int s;
 
 	s = getaddrinfo(NULL, port, h, &result);
-	
 	if (s != 0) {
 		fprintf(stderr, "getaddrinfo %s\n", gai_strerror(s));
 		return -1;
