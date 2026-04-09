@@ -1,5 +1,9 @@
 # HTTP/1.1 Server in C
 
+## TODO
+- Requests from two clients doesn't return info to the second client, searching for blocking code now!
+- I have added `pthread.h` to the #include list, but I will not implement that yet.
+
 ## What exists?
 - TCP socket listening on port passed as argv[1]
 - **Chunked Transfer Encoding**: Send any file chunk by chunk with hex chunk start indicator and chunk end terminator

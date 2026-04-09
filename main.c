@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #define CLIENT_BUF_SIZE 8000
 #define CHUNK_SIZE 512
@@ -35,7 +36,7 @@ HTTP/1.1 Server
 TODO:
 - Request header parsing (in progress)
 - Routing
-- Custom headers per response
+- Custom headers per response (buildable response header or object)
 
 */
 
@@ -158,91 +159,6 @@ void trim_by_delim(
 /* ########################## 
             SERVER
    ######################### */
-void send_stream_file(
-	int client_fd,
-	char *filename
-) {
-
-	char buffer[CHUNK_SIZE];
-
-	char path[PATH_SIZE];
-	snprintf(path, PATH_SIZE, "public/%s", filename);
-
-	FILE *f = fopen(path, "r");
-	
-	if (f == NULL) {
-		printf("Failed to open file: %s\n", filename);
-		send(client_fd, "0\r\n\r\n", 5, 0);
-		return;
-	}
-
-	// Figure out a better way to set and send headers (which you will have to from parsing better)
-	char response[CHUNK_SIZE];
-	int response_len = snprintf(
-		response, 
-		sizeof(response), 
-		"HTTP/1.1 200 OK\r\n"
-		"Content-Type: text/html\r\n"
-		"Transfer-Encoding: chunked\r\n"
-		"Connection: close\r\n"
-		"\r\n"
-	);
-	send(client_fd, response, response_len, 0);
-
-	for (;;) {
-		// -2 incase max chars available (for \r\n characters at end of chunk EOC)
-		int byte_count = fread(buffer, CHAR_SIZE, CHUNK_SIZE - 2, f);
-	
-		if (byte_count) {	
-			memcpy(buffer + byte_count, "\r\n", 2);	
-
-			char hex_header[16];
-			int hex_header_len = snprintf(
-				hex_header, 
-				sizeof(hex_header), 
-				"%x\r\n", 
-				byte_count
-			);
-			
-			send(client_fd, hex_header, hex_header_len, 0); // send the chunk hex header
-			send(client_fd, buffer, byte_count + 2, 0); // +2 for \r\n chars
-		}
-
-		// if EOF (end of file) then send the terminating ASCII 0 literal	
-		if (feof(f) != 0) break;
-	}
-	
-	send(client_fd, "0\r\n\r\n", 5, 0);
-	fclose(f);
-}
-
-LIMArray parse_request_headers(
-	char *req
-) {
-	StringView s = sv(req);
-	LIMArray lim_array = lima(NULL, 0, 0);
-	int last_line = 0;
-	
-	for (int i = 0; i < s.count; i++) {
-		if (i + 1 >= s.count) break;
-	
-		// Checks for \r\n (carriage return, newline)
-		if (s.string[i] == 0x0D && s.string[i + 1] == 0x0A) {
-			char *line_start = (i == 0) ? s.string : &s.string[last_line + 2];
-			int count = (int)(s.string + i - line_start);
-			LineInMemory l = lim(
-				line_start,
-				count
-			);
-			
-			arr_append(lim_array, l);
-			last_line = i;
-		}
-	}
-
-	return lim_array;
-}
-
 const char *http_status_str(
 	int code
 ) {
@@ -272,7 +188,6 @@ const char *http_status_str(
 	}
 }
 
-// works as json response function
 void send_json_response(
 	int *client_fd,
 	int status,
@@ -296,6 +211,94 @@ void send_json_response(
 	close(*client_fd);
 }
 
+int send_stream_file(
+	int *client_fd,
+	char *filename
+) {
+
+	char buffer[CHUNK_SIZE];
+
+	char path[PATH_SIZE];
+	snprintf(path, PATH_SIZE, "public/%s", filename);
+
+	FILE *f = fopen(path, "r");
+	
+	if (f == NULL) {
+		send_json_response(client_fd, 400, "{\"error\": \"Failed to open file.\"}");
+		return -1;
+	}
+
+	// Figure out a better way to set and send headers (which you will have to from parsing better)
+	char response[CHUNK_SIZE];
+	int response_len = snprintf(
+		response, 
+		sizeof(response), 
+		"HTTP/1.1 200 OK\r\n"
+		"Content-Type: text/html\r\n"
+		"Transfer-Encoding: chunked\r\n"
+		"Connection: close\r\n"
+		"\r\n"
+	);
+	send(*client_fd, response, response_len, 0);
+
+	for (;;) {
+		// -2 incase max chars available (for \r\n characters at end of chunk EOC)
+		int byte_count = fread(buffer, CHAR_SIZE, CHUNK_SIZE - 2, f);
+	
+		if (byte_count) {	
+			memcpy(buffer + byte_count, "\r\n", 2);	
+
+			char hex_header[16];
+			int hex_header_len = snprintf(
+				hex_header, 
+				sizeof(hex_header), 
+				"%x\r\n", 
+				byte_count
+			);
+			
+			send(*client_fd, hex_header, hex_header_len, 0); // send the chunk hex header
+			send(*client_fd, buffer, byte_count + 2, 0); // +2 for \r\n chars
+		}
+
+		// if EOF (end of file) then send the terminating ASCII 0 literal	
+		if (feof(f) != 0) {
+			fclose(f);
+			break;
+		};
+	}
+	
+	send(*client_fd, "0\r\n\r\n", 5, 0);
+	close(*client_fd);
+	return 0;
+}
+
+LIMArray parse_request_headers(
+	char *req
+) {
+	StringView s = sv(req);
+	LIMArray lim_array = lima(NULL, 0, 0);
+	int last_line = 0;
+	
+	for (int i = 0; i < s.count; i++) {
+		if (i + 1 >= s.count) break;
+	
+		// Checks for \r\n (carriage return, newline)
+		if (s.string[i] == 0x0D && s.string[i + 1] == 0x0A) {
+			char *line_start = (i == 0) ? s.string : &s.string[last_line + 2];
+			int count = (int)(s.string + i - line_start);
+			LineInMemory l = lim(
+				line_start,
+				count
+			);
+			
+			arr_append(lim_array, l);
+			last_line = i;
+		}
+	}
+
+	return lim_array;
+}
+
 // Returns a pointer to the start of the body
 char *recv_req_chunk(
 	int *client_fd,
@@ -304,27 +307,24 @@ char *recv_req_chunk(
 	ssize_t nn_count = 0;
 	char *mmp = NULL;
 
+	// TODO: recv(...) blocking with cookie-blocking requests from client (igcognito and brave tabs sending this 4th/5th request)...nn eventually resolves to `0` the request ends and it prints Failed to receive request
 	// search for the header terminator
 	for (;;) {
 		ssize_t nn = recv(*client_fd, req + nn_count, CLIENT_BUF_SIZE - 1 - nn_count, 0);
-		if (nn == -1) {
-			send_json_response(client_fd, 400, "{\"error\": \"bad request\"}");
-			return NULL;
-		}
-		
-		if (nn == 0) {
-			close(*client_fd);
-			return NULL;
-		}
-		
+
+		// -1 or 0	
+		if (nn <= 0) return NULL;
+	
 		nn_count += nn;
 		mmp = memmem(req, nn_count, "\r\n\r\n", 4);
 		if (mmp != NULL) break; // found the header terminator
 	}
 
-	req[nn_count] = '\0';
+	req[nn_count] = '\0'; // add null terminator to end of string
 	return mmp + 4; // pointer to start of body
 }
+
+struct timeval tv = { .tv_sec = 0, .tv_usec = 500000 };
 
 void accept_tcp_connections(
 	int sfd,
@@ -342,29 +342,37 @@ void accept_tcp_connections(
 			continue;
 		}
 
+		setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
 		// should be heap allocated
 		// create a http_req and http_res struct
 		// each should have a free_http_[x] method
 		char req[CLIENT_BUF_SIZE];
 		
 		// rr is pointer to start of body, might be useless
+		printf("Start rr.\n");
 		char *rr = recv_req_chunk(&client_fd, req);
+		// not escaping on whatever this final request is that is made to the server
+		printf("End rr.\n");
 		if (rr == NULL) {
 			printf("Failed to receive request.\n");
+			send_json_response(&client_fd, 400, "{\"error\": \"Bad Request\"}");
 			continue;
 		}
+
+		printf("After rr.\n");
 
 		LIMArray lim_array = parse_request_headers(req);
 		if (lim_array.count == 0) {
 			printf("Failed to find any header info.\n");
-			send_json_response(&client_fd, 400, "{\"error\": \"bad request\"}");
+			send_json_response(&client_fd, 400, "{\"error\": \"Bad Request\"}");
 			freelima(&lim_array);
 			continue;
 		}
 
-		freelima(&lim_array); // free later, but free here for now
-		send_stream_file(client_fd, "index.html"); // return generic index.html for all routes for now
-		close(client_fd);
+		// Do something with the headers.
+		freelima(&lim_array);
+		send_stream_file(&client_fd, "index.html");
 	}
 }
 
