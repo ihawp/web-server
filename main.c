@@ -9,7 +9,7 @@
 #include <unistd.h>
 #include <errno.h>
 
-#define CLIENT_BUF_SIZE 512
+#define CLIENT_BUF_SIZE 8000
 #define CHUNK_SIZE 512
 #define RESPONSE_BUF_SIZE 512
 #define PATH_SIZE 256
@@ -158,7 +158,6 @@ void send_stream_file(
 	fclose(f);
 }
 
-// contains a pointer and a count
 typedef struct {
 	char *pointer;
 	size_t count;
@@ -202,7 +201,7 @@ void freelima(
 	arr->capacity = 0;
 }
 
-// returning (arr) is lazy? it expects type passed as arr as return (right now that is LIMArray)
+// returning (arr) is lazy? compiler expects type passed as arr as return
 #define arr_append(arr, item) { \
 	if ((arr).count + 1 >= (arr).capacity) { \
 		if ((arr).capacity == 0) (arr).capacity = 256; \
@@ -227,9 +226,6 @@ LIMArray parse_request_headers(
 	int last_line = 0;
 	
 	for (int i = 0; i < s.count; i++) {
-		unsigned char first;
-		unsigned char second;
-
 		if (i + 1 >= s.count) break;
 		// Checks for \r\n (carriage return, newline)
 		if (s.string[i] == 0x0D && s.string[i + 1] == 0x0A) {
@@ -298,6 +294,28 @@ void send_json_response(
 	close(*client_fd);
 }
 
+int recv_req(
+	int *client_fd,
+	char *req
+) {
+	ssize_t nn_count = 0;
+
+	// search for the header terminator
+	for (;;) {
+		ssize_t nn = recv(*client_fd, req + nn_count, CLIENT_BUF_SIZE - 1 - nn_count, 0);
+		if (nn == -1) {
+			send_json_response(client_fd, 400, "{\"error\": \"bad request\"}");
+			return -1;
+		}
+
+		nn_count += nn;
+		char *mmp = memmem(req, nn_count, "\r\n\r\n", 4);
+		if (mmp != NULL) break; // found the header terminator
+	}
+
+	return (int) nn_count;
+}
+
 void accept_tcp_connections(
 	int sfd,
 	struct sockaddr * restrict peer_addr,
@@ -317,13 +335,18 @@ void accept_tcp_connections(
 
 		// should loop
 		char req[CLIENT_BUF_SIZE];
-		ssize_t nn = recv(client_fd, req, CLIENT_BUF_SIZE - 1, 0);
-		if (nn == -1) {
-			send_json_response(&client_fd, 400, "{\"error\": \"bad request\"}");
-			continue;	
+
+		int rr = recv_req(&client_fd, req);
+		if (rr == -1) {
+			printf("Failed to receive request.\n");
+			continue;
 		}
+
+		// mcp is the pointer to the spot in memory
+		// so if we don't find it keep looping
+
 		// place after bytes with [nn], not at end of buffer
-		req[nn] = '\0';
+		req[rr] = '\0';
 
 		LIMArray lim_array = parse_request_headers(req);
 		
