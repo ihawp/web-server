@@ -192,16 +192,6 @@ StringView split_by_delim(
 	}
 
 	if (i < stv->count) {
-		size_t size = 50;
-		char hi[size];
-		snprintf(
-			hi,
-			size,
-			SV_fmt,
-			(int) i,
-			stv->string
-		);
-
 		StringView item = {
 			.string = stv->string,
 			.count = i
