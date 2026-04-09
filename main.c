@@ -1,19 +1,32 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <stdbool.h>
-#include <sys/stat.h>
 #include <sys/socket.h>
-#include <sys/types.h>
 #include <netdb.h>
 #include <unistd.h>
-#include <errno.h>
 
 #define CLIENT_BUF_SIZE 8000
 #define CHUNK_SIZE 512
 #define RESPONSE_BUF_SIZE 512
 #define PATH_SIZE 256
 #define CHAR_SIZE sizeof(char)
+
+// Returning (arr) is lazy? Compiler expects type passed as arr as return.
+#define arr_append(arr, item) { \
+	if ((arr).count + 1 >= (arr).capacity) { \
+		if ((arr).capacity == 0) (arr).capacity = 256; \
+		size_t new_alloc_amount = (arr).capacity * 2 * sizeof(*(arr).pointer); \
+		void *new = realloc((arr).pointer, new_alloc_amount); \
+		if (new == NULL) { \
+			printf("Failed to reallocate\n"); \
+			return (arr); \
+		} \
+		(arr).pointer = new; \
+		(arr).capacity *= 2; \
+	} \
+	(arr).count += 1; \
+	(arr).pointer[(arr).count - 1] = item; \
+} \
 
 /*
 
@@ -33,6 +46,52 @@ void *xmalloc(size_t size) {
 		return NULL;
 	}
 	return ptr;
+}
+
+/* ##########################
+             LIMA
+   ######################### */
+typedef struct {
+	char *pointer;
+	size_t count;
+} LineInMemory;
+
+LineInMemory lim(
+	char *pointer,
+	size_t count
+) {
+	return (LineInMemory) {
+		.pointer = pointer,
+		.count = count
+	};
+}
+
+typedef struct {
+	LineInMemory *pointer;
+	size_t count;
+	size_t capacity;
+} LIMArray;
+
+LIMArray lima(
+	LineInMemory *pointer,
+	size_t count,
+	size_t capacity
+) {
+	return (LIMArray) {
+		.pointer = pointer,
+		.count = count,
+		.capacity = capacity
+	};
+}
+
+void freelima(
+	LIMArray *arr
+) {
+	if (!arr) return;
+	free(arr->pointer);
+	arr->pointer = NULL;
+	arr->count = 0;
+	arr->capacity = 0;
 }
 
 /* ##########################
@@ -157,66 +216,6 @@ void send_stream_file(
 	fclose(f);
 }
 
-typedef struct {
-	char *pointer;
-	size_t count;
-} LineInMemory;
-
-LineInMemory lim(
-	char *pointer,
-	size_t count
-) {
-	return (LineInMemory) {
-		.pointer = pointer,
-		.count = count
-	};
-}
-
-typedef struct {
-	LineInMemory *pointer;
-	size_t count;
-	size_t capacity;
-} LIMArray;
-
-LIMArray lima(
-	LineInMemory *pointer,
-	size_t count,
-	size_t capacity
-) {
-	return (LIMArray) {
-		.pointer = pointer,
-		.count = count,
-		.capacity = capacity
-	};
-}
-
-void freelima(
-	LIMArray *arr
-) {
-	if (!arr) return;
-	free(arr->pointer);
-	arr->pointer = NULL;
-	arr->count = 0;
-	arr->capacity = 0;
-}
-
-// returning (arr) is lazy? compiler expects type passed as arr as return
-#define arr_append(arr, item) { \
-	if ((arr).count + 1 >= (arr).capacity) { \
-		if ((arr).capacity == 0) (arr).capacity = 256; \
-		size_t new_alloc_amount = (arr).capacity * 2 * sizeof(*(arr).pointer); \
-		void *new = realloc((arr).pointer, new_alloc_amount); \
-		if (new == NULL) { \
-			printf("Failed to reallocate\n"); \
-			return (arr); \
-		} \
-		(arr).pointer = new; \
-		(arr).capacity *= 2; \
-	} \
-	(arr).count += 1; \
-	(arr).pointer[(arr).count - 1] = item; \
-} \
-
 LIMArray parse_request_headers(
 	char *req
 ) {
@@ -226,6 +225,7 @@ LIMArray parse_request_headers(
 	
 	for (int i = 0; i < s.count; i++) {
 		if (i + 1 >= s.count) break;
+	
 		// Checks for \r\n (carriage return, newline)
 		if (s.string[i] == 0x0D && s.string[i + 1] == 0x0A) {
 			char *line_start = (i == 0) ? s.string : &s.string[last_line + 2];
