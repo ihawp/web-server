@@ -307,11 +307,18 @@ int recv_req(
 			send_json_response(client_fd, 400, "{\"error\": \"bad request\"}");
 			return -1;
 		}
-
+		
+		if (nn == 0) {
+			close(*client_fd);
+			return -1;
+		}
+		
 		nn_count += nn;
 		char *mmp = memmem(req, nn_count, "\r\n\r\n", 4);
 		if (mmp != NULL) break; // found the header terminator
 	}
+
+	req[nn_count] = '\0';
 
 	return (int) nn_count;
 }
@@ -341,12 +348,6 @@ void accept_tcp_connections(
 			printf("Failed to receive request.\n");
 			continue;
 		}
-
-		// mcp is the pointer to the spot in memory
-		// so if we don't find it keep looping
-
-		// place after bytes with [nn], not at end of buffer
-		req[rr] = '\0';
 
 		LIMArray lim_array = parse_request_headers(req);
 		
