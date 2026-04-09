@@ -13,7 +13,7 @@
 
 The LIMArray is an implementation that stores a pointer to an array of LineInMemory's, a count of the amount of items inside the array, and the total capacity of the array.
 
-Each LineInMemory stores a pointer to the beginning of the array and a count of the length that should be read after the pointer to find the whole string (count = the length of the string). As mentioned before this is so that the strings do not have to be read into memory individually and rather the buffer can just be managed per recv cycle.
+Each LineInMemory stores a pointer to the beginning of the bytes in memory and a count of the length that should be read after the pointer to find the whole string (count = the length of the string). As mentioned before this is so that the strings do not have to be read into memory individually all at once.
 
 ## StringView
 
