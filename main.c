@@ -155,7 +155,6 @@ void send_stream_file(
 	}
 	
 	send(client_fd, "0\r\n\r\n", 5, 0);
-
 	fclose(f);
 }
 
@@ -201,7 +200,6 @@ void freelima(
 	arr->pointer = NULL;
 	arr->count = 0;
 	arr->capacity = 0;
-	printf("LIMA freed\n");
 }
 
 // returning (arr) is lazy? it expects type passed as arr as return (right now that is LIMArray)
@@ -332,6 +330,7 @@ void accept_tcp_connections(
 		if (lim_array.count == 0) {
 			printf("Failed to find any header info.\n");
 			send_json_response(&client_fd, 400, "{\"error\": \"bad request\"}");
+			freelima(&lim_array);
 			continue;
 		}
 
