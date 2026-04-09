@@ -3,7 +3,7 @@
 ## What exists?
 - TCP socket listening on port passed as argv[1]
 - **Chunked Transfer Encoding**: Send any file chunk by chunk with hex chunk start indicator and chunk end terminator
-- **Header Parsing**: Client recv buffer is read into memory (once, not in loop yet) and buffer is parsed looking for \r\n characters to create a pointer to the start of the string in memory and a count of the length of the string. No actual strings are created from the buffer, but instead we count on the buffer.
+- **Header Parsing**: Client recv buffer is read into memory in a loop until the header terminator `\r\n\r\n` is found, then parsed looking for `\r\n` characters to create a pointer to the start of the string in memory and a count of the length of the string. No actual strings are created from the buffer, but instead we count on the buffer.
 - **Routing**: All routes currently return `public/index.html`
 - **JSON Responses**: HTTP responses with `Content-Type: application/json` and a status code can be sent via `send_json_response()`
 - **HTTP Status Codes**: `http_status_str()` maps ~20 status codes to their reason phrase strings
