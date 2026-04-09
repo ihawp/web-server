@@ -30,7 +30,7 @@ TODO:
 void *xmalloc(size_t size) {
 	void *ptr = malloc(size);
 	if (ptr == NULL) {
-		printf("Failed to allocate memory.");
+		printf("Failed to allocate memory.\n");
 		return NULL;
 	}
 	return ptr;
@@ -104,6 +104,7 @@ void send_stream_file(
 	int client_fd,
 	char *filename
 ) {
+
 	char buffer[CHUNK_SIZE];
 
 	char path[PATH_SIZE];
@@ -116,6 +117,19 @@ void send_stream_file(
 		send(client_fd, "0\r\n\r\n", 5, 0);
 		return;
 	}
+
+	// Figure out a better way to set and send headers (which you will have to from parsing better)
+	char response[CHUNK_SIZE];
+	int response_len = snprintf(
+		response, 
+		sizeof(response), 
+		"HTTP/1.1 200 OK\r\n"
+		"Content-Type: text/html\r\n"
+		"Transfer-Encoding: chunked\r\n"
+		"Connection: close\r\n"
+		"\r\n"
+	);
+	send(client_fd, response, response_len, 0);
 
 	for (;;) {
 		// -2 incase max chars available (for \r\n characters at end of chunk EOC)
@@ -179,6 +193,17 @@ LIMArray lima(
 	};
 }
 
+void freelima(
+	LIMArray *arr
+) {
+	if (!arr) return;
+	free(arr->pointer);
+	arr->pointer = NULL;
+	arr->count = 0;
+	arr->capacity = 0;
+	printf("LIMA freed\n");
+}
+
 // returning (arr) is lazy? it expects type passed as arr as return (right now that is LIMArray)
 #define arr_append(arr, item) { \
 	if ((arr).count + 1 >= (arr).capacity) { \
@@ -186,7 +211,7 @@ LIMArray lima(
 		size_t new_alloc_amount = (arr).capacity * 2 * sizeof(*(arr).pointer); \
 		void *new = realloc((arr).pointer, new_alloc_amount); \
 		if (new == NULL) { \
-			printf("Failed to reallocate"); \
+			printf("Failed to reallocate\n"); \
 			return (arr); \
 		} \
 		(arr).pointer = new; \
@@ -251,17 +276,13 @@ const char *http_status_str(
 	}
 }
 
-void send_error_response(
+// works as json response function
+void send_json_response(
 	int *client_fd,
 	int status,
 	char *error_message	
 ) {
-
-	// have map of status codes to messages?
-
 	char message[RESPONSE_BUF_SIZE];
-
-	// send error response to user
 	int message_length = snprintf(
 		message,
 		sizeof(message),
@@ -296,46 +317,28 @@ void accept_tcp_connections(
 			continue;
 		}
 
-		// could loop
+		// should loop
 		char req[CLIENT_BUF_SIZE];
 		ssize_t nn = recv(client_fd, req, CLIENT_BUF_SIZE - 1, 0);
-		if (nn == -1) continue; // failed to receive info from the client, so send 400+
-		req[nn] = '\0'; // place after bytes with [nn], not at end of buffer
+		if (nn == -1) {
+			send_json_response(&client_fd, 400, "{\"error\": \"bad request\"}");
+			continue;	
+		}
+		// place after bytes with [nn], not at end of buffer
+		req[nn] = '\0';
 
-		// char *filename = requested_resource(req);
-		char *filename = "index.html";
-		// the requested resource will be available in the first header line
-
-		// use the lim_array to create a response for the user
-		// each item is a pointer to a LineInMemory, where there is a pointer
-		// to the start of the line, and the count
 		LIMArray lim_array = parse_request_headers(req);
 		
-		// server was crashing before sending to error route, memory leak below if?
-		// lim_array.count = 0;
-
 		if (lim_array.count == 0) {
-			printf("Failed to find any header info.");
-			// send error response
-			send_error_response(&client_fd, 400, "{\"error\": \"bad request\"}");	
+			printf("Failed to find any header info.\n");
+			send_json_response(&client_fd, 400, "{\"error\": \"bad request\"}");
 			continue;
 		}
-		
-		char response[CHUNK_SIZE];
-		int response_len = snprintf(
-			response, 
-			sizeof(response), 
-			"HTTP/1.1 200 OK\r\n"
-			"Content-Type: text/html\r\n"
-			"Transfer-Encoding: chunked\r\n"
-			"Connection: close\r\n"
-			"\r\n"
-		);
 
-		send(client_fd, response, response_len, 0);
-		
-		// reason for `chunked`:	
-		send_stream_file(client_fd, filename);
+		freelima(&lim_array);
+
+		// return generic index.html for all routes
+		send_stream_file(client_fd, "index.html");
 		
 		close(client_fd);
 	}
@@ -400,7 +403,7 @@ void tcp_server(
 
 	// param 2 = backlog; ...how many requests can queue up before ECONNREFUSED or manual queueing.
 	if (listen(sfd, 50) == -1) {
-		printf("Failed to listen.");
+		printf("Failed to listen.\n");
 		exit(EXIT_FAILURE);
 	}
 	printf("Server listening on port %s\n", port);
