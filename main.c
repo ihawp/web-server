@@ -11,58 +11,27 @@
 
 #define CLIENT_BUF_SIZE 512
 #define CHUNK_SIZE 512
+#define RESPONSE_BUF_SIZE 512
+#define PATH_SIZE 256
+#define CHAR_SIZE sizeof(char)
 
 /*
 
 HTTP/1.1 Server
 
 TODO:
-- Stream client requests, right now I am pretty sure we just read CLIENT_BUF_SIZE and move on
+- Stream client requests (and don't trust POST requests :()
 - Request header parsing
 - Routing
 - Custom headers per response
 
 */
 
-int faddlots(
-	char *filename,
-    	int length,	
-	char *text[]
-) {
-	FILE *f = fopen(filename, "a");
-
-	if (f == NULL) return -1;
-
-	for (int i = 0; i < length; i++) {
-		fprintf(f, "%s", text[i]);
-		if (i == length - 1) fprintf(f, "\n");
-	}
-
-	fclose(f);
-
-	return 0;
-}
-
-int fadd(
-	char *filename,
-	char *text
-) {
-	FILE *f = fopen(filename, "a");
-
-	if (f == NULL) {
-		printf("FILE ERROR: %s", strerror(errno));
-		return -1;
-	}
-
-	fprintf(f, "%s\n", text);
-	return fclose(f);
-}
-
 void *xmalloc(size_t size) {
 	void *ptr = malloc(size);
 	if (ptr == NULL) {
 		printf("Failed to allocate memory.");
-		return 0;
+		return NULL;
 	}
 	return ptr;
 }
@@ -86,8 +55,8 @@ void remove_from_left(
 	StringView *sv,
 	size_t amount
 ) {
-	if (sv->count == 0) return
-;	if (amount > sv->count) amount = sv->count;
+	if (sv->count == 0) return;
+	if (amount > sv->count) amount = sv->count;
 	sv->string += amount;
 	sv->count -= amount;
 }
@@ -120,7 +89,7 @@ void delim_from_right(
 	}
 }
 
-void trim(
+void trim_by_delim(
 	StringView *sv,
 	char *delim
 ) {
@@ -137,37 +106,177 @@ void send_stream_file(
 ) {
 	char buffer[CHUNK_SIZE];
 
-	char path[256];
-	snprintf(path, sizeof(path), "public/%s", filename);
+	char path[PATH_SIZE];
+	snprintf(path, PATH_SIZE, "public/%s", filename);
 
 	FILE *f = fopen(path, "r");
+	
 	if (f == NULL) {
 		printf("Failed to open file: %s\n", filename);
+		send(client_fd, "0\r\n\r\n", 5, 0);
 		return;
 	}
 
 	for (;;) {
 		// -2 incase max chars available (for \r\n characters at end of chunk EOC)
-		int byte_count = fread(buffer, sizeof(char), CHUNK_SIZE - 2, f);
+		int byte_count = fread(buffer, CHAR_SIZE, CHUNK_SIZE - 2, f);
 	
 		if (byte_count) {	
 			memcpy(buffer + byte_count, "\r\n", 2);	
 
 			char hex_header[16];
-			int hex_header_len = snprintf(hex_header, sizeof(hex_header), "%x\r\n", byte_count);
+			int hex_header_len = snprintf(
+				hex_header, 
+				sizeof(hex_header), 
+				"%x\r\n", 
+				byte_count
+			);
 			
 			send(client_fd, hex_header, hex_header_len, 0); // send the chunk hex header
 			send(client_fd, buffer, byte_count + 2, 0); // +2 for \r\n chars
 		}
 
 		// if EOF (end of file) then send the terminating ASCII 0 literal	
-		if (feof(f) != 0) {
-			send(client_fd, "0\r\n\r\n", 5, 0);
-			break;
+		if (feof(f) != 0) break;
+	}
+	
+	send(client_fd, "0\r\n\r\n", 5, 0);
+
+	fclose(f);
+}
+
+// contains a pointer and a count
+typedef struct {
+	char *pointer;
+	size_t count;
+} LineInMemory;
+
+LineInMemory lim(
+	char *pointer,
+	size_t count
+) {
+	return (LineInMemory) {
+		.pointer = pointer,
+		.count = count
+	};
+}
+
+typedef struct {
+	LineInMemory *pointer;
+	size_t count;
+	size_t capacity;
+} LIMArray;
+
+LIMArray lima(
+	LineInMemory *pointer,
+	size_t count,
+	size_t capacity
+) {
+	return (LIMArray) {
+		.pointer = pointer,
+		.count = count,
+		.capacity = capacity
+	};
+}
+
+// returning (arr) is lazy? it expects type passed as arr as return (right now that is LIMArray)
+#define arr_append(arr, item) { \
+	if ((arr).count + 1 >= (arr).capacity) { \
+		if ((arr).capacity == 0) (arr).capacity = 256; \
+		size_t new_alloc_amount = (arr).capacity * 2 * sizeof(*(arr).pointer); \
+		void *new = realloc((arr).pointer, new_alloc_amount); \
+		if (new == NULL) { \
+			printf("Failed to reallocate"); \
+			return (arr); \
+		} \
+		(arr).pointer = new; \
+		(arr).capacity *= 2; \
+	} \
+	(arr).count += 1; \
+	(arr).pointer[(arr).count - 1] = item; \
+} \
+
+LIMArray parse_request_headers(
+	char *req
+) {
+	StringView s = sv(req);
+	LIMArray lim_array = lima(NULL, 0, 0);
+	int last_line = 0;
+	
+	for (int i = 0; i < s.count; i++) {
+		unsigned char first;
+		unsigned char second;
+
+		if (i + 1 >= s.count) break;
+		// Checks for \r\n (carriage return, newline)
+		if (s.string[i] == 0x0D && s.string[i + 1] == 0x0A) {
+			LineInMemory l = lim(
+				&s.string[i],
+				i - last_line - 2 // 2 for \r\n?
+			);
+			arr_append(lim_array, l);
+			last_line = i;
 		}
 	}
 
-	fclose(f);
+	return lim_array;
+}
+
+const char *http_status_str(
+	int code
+) {
+	switch (code) {
+		case 200: return "OK";
+		case 201: return "Created";
+		case 204: return "No content";
+		case 301: return "Moved Permanently";
+		case 302: return "Found";
+		case 304: return "Not Modified";
+		case 400: return "Bad Request";
+		case 401: return "Unauthorized";
+		case 403: return "Forbidden";
+		case 404: return "Not Found";
+		case 405: return "Method Not Allowed";
+		case 408: return "Request Timeout";
+		case 409: return "Conflict";
+		case 413: return "Payload Too Large";
+		case 415: return "Unsupported Media Type";
+		case 422: return "Unprocessable Entity";
+		case 429: return "Too Many Requests";
+		case 500: return "Internal Server Error";
+		case 502: return "Bad Gateway";
+		case 503: return "Service Unavailable";
+		case 504: return "Gateway Timeout";
+		default: return "Unknown";
+	}
+}
+
+void send_error_response(
+	int *client_fd,
+	int status,
+	char *error_message	
+) {
+
+	// have map of status codes to messages?
+
+	char message[RESPONSE_BUF_SIZE];
+
+	// send error response to user
+	int message_length = snprintf(
+		message,
+		sizeof(message),
+		"HTTP/1.1 %d %s\r\n"
+		"Content-Type: application/json\r\n"
+		"Connection: close\r\n"
+		"\r\n"
+		"%s",
+		status,
+		http_status_str(status),
+		error_message
+	);
+
+	send(*client_fd, message, message_length, 0);
+	close(*client_fd);
 }
 
 void accept_tcp_connections(
@@ -175,46 +284,59 @@ void accept_tcp_connections(
 	struct sockaddr * restrict peer_addr,
 	socklen_t *peer_addrlen
 ) {
+
+	*peer_addrlen = sizeof(struct sockaddr_storage);
+
+	// REQUEST / RESPONSE CYCLE
 	for (;;) {
-		*peer_addrlen = sizeof(struct sockaddr_storage);
-		int client_fd = accept(sfd, peer_addr, peer_addrlen); // pass NULL, NULL as latter to not store client
-
-		printf("sa_family:\t\t%d\n", peer_addr->sa_family);
-		printf("addrlen:\t\t%d\n", *peer_addrlen);
-
-		// ntohs
-		// inet_ntop (ipv4), inet_ntop6 (ipv6)
+		int client_fd = accept(sfd, peer_addr, peer_addrlen);
 
 		if (client_fd == -1) {
 			printf("Failed to accept connection from client.\n");
 			continue;
 		}
 
-		char buffer[CLIENT_BUF_SIZE];
-		ssize_t n = recv(client_fd, buffer, CLIENT_BUF_SIZE, 0);
+		// could loop
+		char req[CLIENT_BUF_SIZE];
+		ssize_t nn = recv(client_fd, req, CLIENT_BUF_SIZE - 1, 0);
+		if (nn == -1) continue; // failed to receive info from the client, so send 400+
+		req[nn] = '\0'; // place after bytes with [nn], not at end of buffer
 
-		printf("Client Request Buffer:\n%s\n", buffer);
+		// char *filename = requested_resource(req);
+		char *filename = "index.html";
+		// the requested resource will be available in the first header line
 
-		// stream the client request, begin parsing
-		// parse the client request: figure out what they want
-		// send it to them
+		// use the lim_array to create a response for the user
+		// each item is a pointer to a LineInMemory, where there is a pointer
+		// to the start of the line, and the count
+		LIMArray lim_array = parse_request_headers(req);
+		
+		// server was crashing before sending to error route, memory leak below if?
+		// lim_array.count = 0;
 
+		if (lim_array.count == 0) {
+			printf("Failed to find any header info.");
+			// send error response
+			send_error_response(&client_fd, 400, "{\"error\": \"bad request\"}");	
+			continue;
+		}
+		
 		char response[CHUNK_SIZE];
 		int response_len = snprintf(
 			response, 
 			sizeof(response), 
 			"HTTP/1.1 200 OK\r\n"
 			"Content-Type: text/html\r\n"
-			// "Content-Length: %zu\r\n"
 			"Transfer-Encoding: chunked\r\n"
 			"Connection: close\r\n"
 			"\r\n"
 		);
 
 		send(client_fd, response, response_len, 0);
-
-		char *filename = "index.html";
+		
+		// reason for `chunked`:	
 		send_stream_file(client_fd, filename);
+		
 		close(client_fd);
 	}
 }
@@ -256,10 +378,6 @@ int initiate_server(
 	return 0;
 }
 
-typedef struct {
-	char *fy;
-} TCP_Options;
-
 void tcp_server(
 	char *port
 ) {
@@ -285,7 +403,7 @@ void tcp_server(
 		printf("Failed to listen.");
 		exit(EXIT_FAILURE);
 	}
-	printf("TCP Connection listenning on port %s\n", port);
+	printf("Server listening on port %s\n", port);
 	
 	accept_tcp_connections(sfd, (struct sockaddr*)&peer_addr, &peer_addrlen);
 }
