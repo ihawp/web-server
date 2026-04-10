@@ -4,9 +4,17 @@
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <netdb.h>
-#include <poll.h>
+// #include <poll.h>
 // #include <pthread.h>
 
+/*
+TODO:
+- Request header parsing (in progress)
+- Custom response headers
+- Unused Includes: poll.h, pthread.h
+*/
+
+// TODO: Organize and better label
 #define CLIENT_BUF_SIZE 8000
 #define CHUNK_SIZE 512
 #define RESPONSE_BUF_SIZE 512
@@ -34,17 +42,6 @@
 	(arr).count += 1; \
 	(arr).pointer[(arr).count - 1] = item; \
 } \
-
-/*
-
-HTTP/1.1 Server
-
-TODO:
-- Request header parsing (in progress)
-- Routing
-- Custom headers per response (buildable response header or object)
-
-*/
 
 void *xmalloc(size_t size) {
 	void *ptr = malloc(size);
@@ -102,7 +99,7 @@ void freelima(
 }
 
 /* ##########################
-       REQUEST OPERATIONS
+            REQUEST
    ######################### */
 typedef struct {
 	LIMArray *headers;
@@ -120,12 +117,13 @@ void freeHTTPRequest(
 	memset(hrq->http_version, 0, REQ_HTTP_VERSION_SIZE);
 }
 
-/*
+/* ##########################
+            RESPONSE
+   ######################### */
 typedef struct {
 	LIMArray *headers;
-	char *something_else;// like action? 
+	char *body; // whatever info you intend to send (so that headers can be application/json..html..css etc).
 } HTTPResponse;
-*/
 
 /* ##########################
        STRING OPERATIONS
@@ -295,15 +293,17 @@ char *file_to_content_type(
 
 int send_stream_file(
 	int *client_fd,
-	char *filename
+	char *path
 ) {
+	if (strcmp(path, "/\0") == 0) {
+		path = "index.html";
+	}
 
 	char buffer[CHUNK_SIZE];
+	char public_path[PATH_SIZE];
+	snprintf(public_path, PATH_SIZE, "public/%s", path);
 
-	char path[PATH_SIZE];
-	snprintf(path, PATH_SIZE, "public/%s", filename);
-
-	FILE *f = fopen(path, "r");
+	FILE *f = fopen(public_path, "r");
 	
 	if (f == NULL) {
 		send_json_response(client_fd, 400, "{\"error\": \"Failed to open file.\"}");
@@ -311,7 +311,7 @@ int send_stream_file(
 	}
 
 	// Figure out what type the file is. 
-	char *content_type = file_to_content_type(filename);
+	char *content_type = file_to_content_type(path);
 
 	char response[CHUNK_SIZE];
 	int response_len = snprintf(
@@ -357,41 +357,20 @@ int send_stream_file(
 	return 0;
 }
 
-HTTPRequest double_pass_headers(
-	LIMArray *headers
+HTTPResponse create_http_response(
+	HTTPRequest *http_request
 ) {
-	size_t line_size = 256;
-	char header[line_size];
+	/* 
+		0x20: ` `
+		0x3A: `:`
+	*/
 
-	HTTPRequest req;
-	req.headers = headers;
-	
-	for (int i = 0; i < headers->count; i++) {
-		int size = snprintf(
-			header,
-			line_size,
-			SV_fmt, 
-			(int) headers->pointer[i].count,
-			headers->pointer[i].pointer
-		);
-	
-		/* 
-			0x20: ` `
-			0x3A: `:`
-		*/
+	HTTPResponse res;
 
-		if (i == 0) {
-			StringView svh = sv(header);
-			StringView fsvh = split_by_delim(&svh, 0x20);
-			StringView path = split_by_delim(&svh, 0x20);
+	for (int i = 0; i < http_request->headers->count; i++) {
+		if (i == 0) continue;
 
-			SV_to_memory(req.method, REQ_METHOD_SIZE, &fsvh);
-			SV_to_memory(req.path, REQ_PATH_SIZE, &path);
-			SV_to_memory(req.http_version, REQ_HTTP_VERSION_SIZE, &svh);
-			continue;
-		}
-
-		StringView svh = { .string = headers->pointer[i].pointer, .count = headers->pointer[i].count };
+		StringView svh = { .string = http_request->headers->pointer[i].pointer, .count = http_request->headers->pointer[i].count };
 		StringView key = split_by_delim(&svh, 0x3A);
 		trim_by_delim(&svh, " ");
 		
@@ -439,9 +418,55 @@ HTTPRequest double_pass_headers(
 		if (HDR("Via")) {}
 		if (HDR("Warning")) {}
 
+		// non-standard
+		if (HDR("Upgrade-Insecure-Requests")) {}
+		if (HDR("X-Requested-With")) {}
+		if (HDR("DNT")) {}
+		if (HDR("X-Forwarded-For")) {}
+		if (HDR("X-Forwarded-Host")) {}
+		if (HDR("X-Forwarded-Proto")) {}
+		if (HDR("Front-End-Https")) {}
+		if (HDR("X-Http-Method-Override")) {}
+		if (HDR("X-ATT-DeviceId")) {}
+		if (HDR("X-Wap-Profile")) {}
+		if (HDR("Proxy-Connection")) {}
+		if (HDR("X-UIDH")) {}
+		if (HDR("X-Csrf-Token")) {}
+		if (HDR("X-Request-Id")) {}
+		if (HDR("X-Correlation-Id")) {}
+		if (HDR("Correlation-Id")) {}
+		if (HDR("Save-Data")) {}
+		if (HDR("Sec-GPC")) {}
+
 		#undef HDR
-		// add common non-standard headers here (X-Powered-By...etc)
 	}
+
+	return res;
+}
+
+HTTPRequest create_http_request(
+	LIMArray *headers
+) {
+	size_t line_size = 256;
+	char header[line_size];
+	HTTPRequest req;
+	req.headers = headers;
+
+	int size = snprintf(
+		header,
+		line_size,
+		SV_fmt, 
+		(int) headers->pointer[0].count,
+		headers->pointer[0].pointer
+	);
+	
+	StringView svh = sv(header);
+	StringView fsvh = split_by_delim(&svh, 0x20);
+	StringView path = split_by_delim(&svh, 0x20);
+
+	SV_to_memory(req.method, REQ_METHOD_SIZE, &fsvh);
+	SV_to_memory(req.path, REQ_PATH_SIZE, &path);
+	SV_to_memory(req.http_version, REQ_HTTP_VERSION_SIZE, &svh);
 
 	return req;
 }
@@ -471,7 +496,7 @@ LIMArray parse_request_headers(
 }
 
 // Returns a pointer to the start of the body
-char *recv_req_chunk(
+char *recv_req_chunks(
 	int *client_fd,
 	char *req
 ) {
@@ -493,7 +518,7 @@ char *recv_req_chunk(
 	for (;;) {   
  		ssize_t nn = recv(*client_fd, req + nn_count, CLIENT_BUF_SIZE - 1 - nn_count, 0);
 
-		// -1 or 0	
+		// -1 or 0
 		if (nn <= 0) return NULL;
 	
 		nn_count += nn;
@@ -505,30 +530,29 @@ char *recv_req_chunk(
 	return mmp + 4; // pointer to start of body
 }
 
-struct timeval tv = { .tv_sec = 0, .tv_usec = 500000 };
-
 void accept_tcp_connections(
 	int sfd,
 	struct sockaddr * restrict peer_addr,
 	socklen_t *peer_addrlen
 ) {
-
-	*peer_addrlen = sizeof(struct sockaddr_storage);
+	struct timeval tv = { .tv_sec = 0, .tv_usec = 50000 }; // 50ms
+	int tv_size = sizeof(tv);
 
 	// REQUEST / RESPONSE CYCLE
 	for (;;) {
+		// Try to accept a connection request from the client.
 		int client_fd = accept(sfd, peer_addr, peer_addrlen);
 		if (client_fd == -1) {
 			printf("Failed to accept connection from client.\n");
 			continue;
 		}
 
-		// set a default timeout on the client sending bytes
-		setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+		// Set a default timeout on the client sending bytes to server.
+		setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, tv_size);
 
-		// should be heap allocated (see HTTPRequest, HTTPResponse).
+		// should be dynamically allocated
 		char req[CLIENT_BUF_SIZE];
-		char *rr = recv_req_chunk(&client_fd, req);
+		char *rr = recv_req_chunks(&client_fd, req);
 		if (rr == NULL) {
 			printf("Failed to receive request.\n");
 			send_json_response(&client_fd, 400, "{\"error\": \"Bad Request\"}");
@@ -543,27 +567,29 @@ void accept_tcp_connections(
 			continue;
 		}
 
-		HTTPRequest http_request = double_pass_headers(&lim_array);
+		// creates the http request that will be passed to create http_response
+		HTTPRequest http_request = create_http_request(&lim_array);
 
 		// 0x2f = /
-		// memchr(0x2F);
-		/*
-		printf("PATH: %s\n", http_request.path);
-		printf("METHOD: %s\n", http_request.method);
-		printf("HTTP_VERSION: %s\n", http_request.http_version);
-		*/
 
-		if (strcmp(http_request.path, "/\0") == 0) {
-			send_stream_file(&client_fd, "index.html");
-			freeHTTPRequest(&http_request);
+		// block post method
+		if (strcmp(http_request.method, "POST\0") == 0) {
+			send_json_response(&client_fd, 400, "{\"error\": \"Bad Request\", \"message\": \"We don't accept these..yet!\"}");
 			continue;
 		}
 
+
+		HTTPResponse http_response = create_http_response(&http_request);
+
 		send_stream_file(&client_fd, http_request.path);
+		
 		freeHTTPRequest(&http_request);
 	}
 }
 
+/* ########################## 
+         START SERVER
+   ######################### */
 int initiate_server(
 	struct addrinfo *h,
 	int *sfd,
@@ -604,7 +630,7 @@ int tcp_server(
 ) {
 	struct addrinfo h;
 	int sfd;
-	socklen_t peer_addrlen;
+	socklen_t peer_addrlen = sizeof(struct sockaddr_storage);
 	struct sockaddr_storage peer_addr;
 
 	memset(&h, 0, sizeof(h));
@@ -629,19 +655,18 @@ int tcp_server(
 	accept_tcp_connections(sfd, (struct sockaddr*)&peer_addr, &peer_addrlen);
 }
 
-/* ########################## 
-         YOU FOUND IT!
-   ######################### */
 int main(int argc, char **argv) {
 	
 	if (argc < 2) {
-		printf("Too few arguments.\n");
+		printf("Command failed, use:\n\nserver <PORT>\n");
 		return 1;
 	}
 
-	if (tcp_server(argv[1]) == -1)
+	if (tcp_server(argv[1]) == -1) {
+		printf("Failed to start server.");
 		exit(EXIT_FAILURE);	
+	}
 
-	printf("Process exited cleanly!?");	
+	printf("Process exited cleanly.");	
 	return 0;
 }
