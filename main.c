@@ -357,13 +357,6 @@ int send_stream_file(
 	return 0;
 }
 
-int extract_first_line(
-	HTTPRequest *hrq
-	
-) {
-
-}
-
 HTTPRequest double_pass_headers(
 	LIMArray *headers
 ) {
