@@ -1,9 +1,9 @@
 #include <stdio.h>
+#include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <netdb.h>
-#include <unistd.h>
 #include <poll.h>
 // #include <pthread.h>
 
@@ -12,6 +12,11 @@
 #define RESPONSE_BUF_SIZE 512
 #define PATH_SIZE 256
 #define CHAR_SIZE sizeof(char)
+
+// HTTPRequest
+#define REQ_METHOD_SIZE 16
+#define REQ_PATH_SIZE 256
+#define REQ_HTTP_VERSION_SIZE 24
 
 // Returning (arr) is lazy? Compiler expects type passed as arr as return.
 #define arr_append(arr, item) { \
@@ -101,9 +106,19 @@ void freelima(
    ######################### */
 typedef struct {
 	LIMArray *headers;
-	char *method;
-	char *path;
+	char method[REQ_METHOD_SIZE];
+	char path[REQ_PATH_SIZE];
+	char http_version[REQ_HTTP_VERSION_SIZE];
 } HTTPRequest;
+
+void freeHTTPRequest(
+	HTTPRequest *hrq
+) {
+	freelima(hrq->headers);
+	memset(hrq->method, 0, REQ_METHOD_SIZE);
+	memset(hrq->path, 0, REQ_PATH_SIZE);
+	memset(hrq->http_version, 0, REQ_HTTP_VERSION_SIZE);
+}
 
 /*
 typedef struct {
@@ -127,9 +142,10 @@ StringView sv(char *string) {
 	};
 }
 
-#define SV_fmt "%.*s\n"
+#define SV_fmt "%.*s"
 #define SV_arg(s) (int) (s)->count, (s)->string
-#define SV_to_memory(h, h_size, s) snprintf(h, h_size, SV_fmt, SV_arg(s));
+#define SV_print(s, string) printf("%s"SV_fmt"\n", string, SV_arg(s))
+#define SV_to_memory(h, h_size, s) snprintf(h, h_size, SV_fmt, SV_arg(s))
 
 void print_sv_string(
 	StringView *sv_string
@@ -261,6 +277,22 @@ void send_json_response(
 	close(*client_fd);
 }
 
+char *file_to_content_type(
+	char *path
+) {
+	const char *ext = strrchr(path, '.');
+
+	if (!ext) return "application/octet-stream";
+	if (strcmp(ext, ".html") == 0) return "text/html";
+	if (strcmp(ext, ".css") == 0) return "text/css";
+	if (strcmp(ext, ".js") == 0) return "application/javascript";
+	if (strcmp(ext, ".json") == 0) return "application/json";
+	if (strcmp(ext, ".png") == 0) return "image/png";
+	if (strcmp(ext, ".jpg") == 0) return "image/jpeg";
+	if (strcmp(ext, ".webp") == 0) return "image/webp";
+	return "application/octet-stream";
+}
+
 int send_stream_file(
 	int *client_fd,
 	char *filename
@@ -278,16 +310,19 @@ int send_stream_file(
 		return -1;
 	}
 
-	// Figure out a better way to set and send headers (which you will have to from parsing better)
+	// Figure out what type the file is. 
+	char *content_type = file_to_content_type(filename);
+
 	char response[CHUNK_SIZE];
 	int response_len = snprintf(
 		response, 
 		sizeof(response), 
 		"HTTP/1.1 200 OK\r\n"
-		"Content-Type: text/html\r\n"
+		"Content-Type: %s\r\n"
 		"Transfer-Encoding: chunked\r\n"
 		"Connection: close\r\n"
-		"\r\n"
+		"\r\n",
+		content_type
 	);
 	send(*client_fd, response, response_len, 0);
 
@@ -322,38 +357,100 @@ int send_stream_file(
 	return 0;
 }
 
-void print_headers(
+int extract_first_line(
+	HTTPRequest *hrq
+	
+) {
+
+}
+
+HTTPRequest double_pass_headers(
 	LIMArray *headers
 ) {
 	size_t line_size = 256;
 	char header[line_size];
+
+	HTTPRequest req;
+	req.headers = headers;
 	
 	for (int i = 0; i < headers->count; i++) {
 		int size = snprintf(
 			header,
 			line_size,
-			"%.*s", 
+			SV_fmt, 
 			(int) headers->pointer[i].count,
 			headers->pointer[i].pointer
 		);
+	
+		/* 
+			0x20: ` `
+			0x3A: `:`
+		*/
 
-		StringView svh = sv(header);
+		if (i == 0) {
+			StringView svh = sv(header);
+			StringView fsvh = split_by_delim(&svh, 0x20);
+			StringView path = split_by_delim(&svh, 0x20);
 
-		// 0x20: space
-		// 0x3A: :
-		StringView fsvh = split_by_delim(&svh, 0x20);
-		remove_from_right(&fsvh, 1);
+			SV_to_memory(req.method, REQ_METHOD_SIZE, &fsvh);
+			SV_to_memory(req.path, REQ_PATH_SIZE, &path);
+			SV_to_memory(req.http_version, REQ_HTTP_VERSION_SIZE, &svh);
+			continue;
+		}
 
-		// should read the string into memory for comparison?
-		// or can I like print to stdin and then check it out
-		// as a value on the next line?
-		char t2sh[line_size];
-		SV_to_memory(t2sh, line_size, &svh);
-		printf("%s\n", t2sh);		
+		StringView svh = { .string = headers->pointer[i].pointer, .count = headers->pointer[i].count };
+		StringView key = split_by_delim(&svh, 0x3A);
+		trim_by_delim(&svh, " ");
+		
+		#define HDR(name) strncmp(key.string, name, key.count) == 0
 
-		// print_sv_string(&svh);
-		// print_sv_string(&fsvh);
+		if (HDR("A-IM")) {}
+		if (HDR("Accept")) {}
+		if (HDR("Accept-Charset")) {}
+		if (HDR("Accept-Datetime")) {}
+		if (HDR("Accept-Encoding")) {}
+		if (HDR("Accept-Language")) {}
+		if (HDR("Access-Control-Request-Method")) {}
+		if (HDR("Access-Control-Request-Headers")) {}
+		if (HDR("Authorization")) {}	
+		if (HDR("Cache-Control")) {}
+		if (HDR("Connection")) {}
+		if (HDR("Content-Encoding")) {}
+		if (HDR("Content-Length")) {}
+		if (HDR("Content-MD5")) {}
+		if (HDR("Content-Type")) {}
+		if (HDR("Cookie")) {}
+		if (HDR("Date")) {}
+		if (HDR("Expect")) {}
+		if (HDR("Forwarded")) {}
+		if (HDR("From")) {}
+		if (HDR("Host")) {}
+		if (HDR("HTTP2-Settings")) {}
+		if (HDR("If-Match")) {}
+		if (HDR("If-Modified-Since")) {}
+		if (HDR("If-None-Match")) {}
+		if (HDR("If-Range")) {}
+		if (HDR("If-Unmodified-Since")) {}
+		if (HDR("Max-Forwards")) {}
+		if (HDR("Origin")) {}
+		if (HDR("Pragma")) {}
+		if (HDR("Prefer")) {}
+		if (HDR("Proxy-Authorization")) {}
+		if (HDR("Range")) {}
+		if (HDR("Referer")) {}
+		if (HDR("TE")) {}
+		if (HDR("Trailer")) {}
+		if (HDR("Transfer-Encoding")) {}
+		if (HDR("User-Agent")) {}
+		if (HDR("Upgrade")) {}
+		if (HDR("Via")) {}
+		if (HDR("Warning")) {}
+
+		#undef HDR
+		// add common non-standard headers here (X-Powered-By...etc)
 	}
+
+	return req;
 }
 
 LIMArray parse_request_headers(
@@ -370,11 +467,8 @@ LIMArray parse_request_headers(
 		if (s.string[i] == 0x0D && s.string[i + 1] == 0x0A) {
 			char *line_start = (last_line == 0) ? s.string : &s.string[last_line + 2];
 			int count = (int)(s.string + i - line_start);
-			LineInMemory l = lim(
-				line_start,
-				count
-			);
-			
+			LineInMemory l = lim(line_start, count);
+	
 			arr_append(lim_array, l);
 			last_line = i;
 		}
@@ -448,7 +542,6 @@ void accept_tcp_connections(
 			continue;
 		}
 
-		// start calling this headers
 		LIMArray lim_array = parse_request_headers(req);
 		if (lim_array.count == 0) {
 			printf("Failed to find any header info.\n");
@@ -457,17 +550,24 @@ void accept_tcp_connections(
 			continue;
 		}
 
-		// create a split function, read lines
-		// into memory line by line and start building
-		// a http response block
-		print_headers(&lim_array);
+		HTTPRequest http_request = double_pass_headers(&lim_array);
 
 		// 0x2f = /
 		// memchr(0x2F);
+		/*
+		printf("PATH: %s\n", http_request.path);
+		printf("METHOD: %s\n", http_request.method);
+		printf("HTTP_VERSION: %s\n", http_request.http_version);
+		*/
 
-		// Do something with the headers.
-		freelima(&lim_array);
-		send_stream_file(&client_fd, "index.html");
+		if (strcmp(http_request.path, "/\0") == 0) {
+			send_stream_file(&client_fd, "index.html");
+			freeHTTPRequest(&http_request);
+			continue;
+		}
+
+		send_stream_file(&client_fd, http_request.path);
+		freeHTTPRequest(&http_request);
 	}
 }
 

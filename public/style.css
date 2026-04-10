@@ -1,11 +1,3 @@
-/*
-IF I WANT TO USE THIS:
-
-I need to add routing to the web server 
-to allow for accessing different resources 
-on the 'network'
-
-*/
 html {
 	scroll-behavior: smooth;
 	box-sizing: border-box;
