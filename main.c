@@ -129,6 +129,7 @@ StringView sv(char *string) {
 
 #define SV_fmt "%.*s\n"
 #define SV_arg(s) (int) (s)->count, (s)->string
+#define SV_to_memory(h, h_size, s) snprintf(h, h_size, SV_fmt, SV_arg(s));
 
 void print_sv_string(
 	StringView *sv_string
@@ -324,7 +325,7 @@ int send_stream_file(
 void print_headers(
 	LIMArray *headers
 ) {
-	size_t line_size = 128;
+	size_t line_size = 256;
 	char header[line_size];
 	
 	for (int i = 0; i < headers->count; i++) {
@@ -343,10 +344,15 @@ void print_headers(
 		StringView fsvh = split_by_delim(&svh, 0x20);
 		remove_from_right(&fsvh, 1);
 
-		// so now I just map what should be done with each header type, I will utilize curl or nodejs or something in regards to the response being made
+		// should read the string into memory for comparison?
+		// or can I like print to stdin and then check it out
+		// as a value on the next line?
+		char t2sh[line_size];
+		SV_to_memory(t2sh, line_size, &svh);
+		printf("%s\n", t2sh);		
 
-		print_sv_string(&svh);
-		print_sv_string(&fsvh);
+		// print_sv_string(&svh);
+		// print_sv_string(&fsvh);
 	}
 }
 
