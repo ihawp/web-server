@@ -11,10 +11,11 @@
 TODO:
 - Request header parsing (in progress)
 - Custom response headers
+- Cookies
 - Unused Includes: poll.h, pthread.h
 */
 
-// TODO: Organize and better label
+// TODO: Organize and label better
 #define CLIENT_BUF_SIZE 8000
 #define CHUNK_SIZE 512
 #define RESPONSE_BUF_SIZE 512
@@ -34,10 +35,11 @@ TODO:
 		void *new = realloc((arr).pointer, new_alloc_amount); \
 		if (new == NULL) { \
 			printf("Failed to reallocate\n"); \
-			return (arr); \
+			(arr).pointer = NULL; \
+		} else { \
+			(arr).pointer = new; \
+			(arr).capacity *= 2; \
 		} \
-		(arr).pointer = new; \
-		(arr).capacity *= 2; \
 	} \
 	(arr).count += 1; \
 	(arr).pointer[(arr).count - 1] = item; \
@@ -51,79 +53,6 @@ void *xmalloc(size_t size) {
 	}
 	return ptr;
 }
-
-/* ##########################
-             LIMA
-   ######################### */
-typedef struct {
-	char *pointer;
-	size_t count;
-} LineInMemory;
-
-LineInMemory lim(
-	char *pointer,
-	size_t count
-) {
-	return (LineInMemory) {
-		.pointer = pointer,
-		.count = count
-	};
-}
-
-typedef struct {
-	LineInMemory *pointer;
-	size_t count;
-	size_t capacity;
-} LIMArray;
-
-LIMArray lima(
-	LineInMemory *pointer,
-	size_t count,
-	size_t capacity
-) {
-	return (LIMArray) {
-		.pointer = pointer,
-		.count = count,
-		.capacity = capacity
-	};
-}
-
-void freelima(
-	LIMArray *arr
-) {
-	if (!arr) return;
-	free(arr->pointer);
-	arr->pointer = NULL;
-	arr->count = 0;
-	arr->capacity = 0;
-}
-
-/* ##########################
-            REQUEST
-   ######################### */
-typedef struct {
-	LIMArray *headers;
-	char method[REQ_METHOD_SIZE];
-	char path[REQ_PATH_SIZE];
-	char http_version[REQ_HTTP_VERSION_SIZE];
-} HTTPRequest;
-
-void freeHTTPRequest(
-	HTTPRequest *hrq
-) {
-	freelima(hrq->headers);
-	memset(hrq->method, 0, REQ_METHOD_SIZE);
-	memset(hrq->path, 0, REQ_PATH_SIZE);
-	memset(hrq->http_version, 0, REQ_HTTP_VERSION_SIZE);
-}
-
-/* ##########################
-            RESPONSE
-   ######################### */
-typedef struct {
-	LIMArray *headers;
-	char *body; // whatever info you intend to send (so that headers can be application/json..html..css etc).
-} HTTPResponse;
 
 /* ##########################
        STRING OPERATIONS
@@ -220,6 +149,100 @@ StringView split_by_delim(
 	return item;
 }
 
+/* ##########################
+             LIMA
+   ######################### */
+typedef struct {
+	char *pointer;
+	size_t count;
+} LineInMemory;
+
+LineInMemory lim(
+	char *pointer,
+	size_t count
+) {
+	return (LineInMemory) {
+		.pointer = pointer,
+		.count = count
+	};
+}
+
+typedef struct {
+	LineInMemory *pointer;
+	size_t count;
+	size_t capacity;
+} LIMArray;
+
+LIMArray lima(
+	LineInMemory *pointer,
+	size_t count,
+	size_t capacity
+) {
+	return (LIMArray) {
+		.pointer = pointer,
+		.count = count,
+		.capacity = capacity
+	};
+}
+
+void freelima(
+	LIMArray *arr
+) {
+	if (!arr) return;
+	free(arr->pointer);
+	arr->pointer = NULL;
+	arr->count = 0;
+	arr->capacity = 0;
+}
+
+/* ##########################
+            REQUEST
+   ######################### */
+typedef struct {
+	LIMArray *headers;
+	LineInMemory *body; // TODO
+	char method[REQ_METHOD_SIZE];
+	char path[REQ_PATH_SIZE];
+	char http_version[REQ_HTTP_VERSION_SIZE];
+} HTTPRequest;
+
+void freeHTTPRequest(
+	HTTPRequest *hrq
+) {
+	freelima(hrq->headers);
+	memset(hrq->method, 0, REQ_METHOD_SIZE);
+	memset(hrq->path, 0, REQ_PATH_SIZE);
+	memset(hrq->http_version, 0, REQ_HTTP_VERSION_SIZE);
+}
+
+/* ##########################
+            RESPONSE
+   ######################### */
+typedef struct {
+	LIMArray *headers;
+	StringView body;
+} HTTPResponse;
+
+void freeHTTPResponse(
+	HTTPResponse *htr
+) {
+	freelima(htr->headers);
+}
+
+int add_header(
+	HTTPResponse *htr,
+	char *header 
+) {
+	// update the size of the body
+	size_t header_size = 256;	
+	char *new_header = xmalloc(header_size);
+	if (new_header == NULL) return -1;
+	LineInMemory new_lim = lim(new_header, header_size);
+	arr_append((*htr->headers), new_lim);
+
+	return 0;
+}
+
 /* ########################## 
             SERVER
    ######################### */
@@ -303,15 +326,18 @@ int send_stream_file(
 	char public_path[PATH_SIZE];
 	snprintf(public_path, PATH_SIZE, "public/%s", path);
 
-	FILE *f = fopen(public_path, "r");
+	char *content_type = file_to_content_type(path);
+	
+	// TODO: if (the file is an image type, then open as "rb")
+	char *fm = "r";
+	if (0) fm = "rb";
+
+	FILE *f = fopen(public_path, fm);
 	
 	if (f == NULL) {
-		send_json_response(client_fd, 400, "{\"error\": \"Failed to open file.\"}");
+		send_json_response(client_fd, 404, "{\"error\": \"Not Found\"}");
 		return -1;
 	}
-
-	// Figure out what type the file is. 
-	char *content_type = file_to_content_type(path);
 
 	char response[CHUNK_SIZE];
 	int response_len = snprintf(
@@ -346,34 +372,41 @@ int send_stream_file(
 		}
 
 		// if EOF (end of file) then send the terminating ASCII 0 literal	
-		if (feof(f) != 0) {
-			fclose(f);
-			break;
-		};
+		if (feof(f) != 0) break;
 	}
 	
+	fclose(f);
 	send(*client_fd, "0\r\n\r\n", 5, 0);
 	close(*client_fd);
 	return 0;
 }
 
-HTTPResponse create_http_response(
-	HTTPRequest *http_request
+int fill_http_response(
+	HTTPRequest *http_request,
+	HTTPResponse *http_response
 ) {
 	/* 
 		0x20: ` `
 		0x3A: `:`
 	*/
 
-	HTTPResponse res;
+	size_t header_size = 256;
+
+	http_response->headers = xmalloc(sizeof(LIMArray));
+	LIMArray lim_array = lima(NULL, 0, 0);   	
+	*http_response->headers = lim_array; 
 
 	for (int i = 0; i < http_request->headers->count; i++) {
 		if (i == 0) continue;
 
-		StringView svh = { .string = http_request->headers->pointer[i].pointer, .count = http_request->headers->pointer[i].count };
-		StringView key = split_by_delim(&svh, 0x3A);
-		trim_by_delim(&svh, " ");
-		
+		StringView value = {
+			.string = http_request->headers->pointer[i].pointer,
+			.count = http_request->headers->pointer[i].count
+		};
+	 	
+		StringView key = split_by_delim(&value, 0x3A);
+		trim_by_delim(&value, " ");
+	
 		#define HDR(name) strncmp(key.string, name, key.count) == 0
 
 		if (HDR("A-IM")) {}
@@ -388,7 +421,11 @@ HTTPResponse create_http_response(
 		if (HDR("Cache-Control")) {}
 		if (HDR("Connection")) {}
 		if (HDR("Content-Encoding")) {}
-		if (HDR("Content-Length")) {}
+		if (HDR("Content-Length")) {
+			/* capture the expected content length and cast as int
+			if FUTURE body exceeds this size reject the connection
+			also reject if it exceeds MAX_SIZE (undefined rn) */
+		}
 		if (HDR("Content-MD5")) {}
 		if (HDR("Content-Type")) {}
 		if (HDR("Cookie")) {}
@@ -396,7 +433,9 @@ HTTPResponse create_http_response(
 		if (HDR("Expect")) {}
 		if (HDR("Forwarded")) {}
 		if (HDR("From")) {}
-		if (HDR("Host")) {}
+		if (HDR("Host")) {
+			SV_print(&value, "SVH: ");
+		}
 		if (HDR("HTTP2-Settings")) {}
 		if (HDR("If-Match")) {}
 		if (HDR("If-Modified-Since")) {}
@@ -441,40 +480,41 @@ HTTPResponse create_http_response(
 		#undef HDR
 	}
 
-	return res;
+	return 0;
 }
 
-HTTPRequest create_http_request(
-	LIMArray *headers
+int filter_path_method_version(
+	HTTPRequest *req
 ) {
 	size_t line_size = 256;
-	char header[line_size];
-	HTTPRequest req;
-	req.headers = headers;
+	char *header = xmalloc(line_size);
+	if (header == NULL) return -1;
 
 	int size = snprintf(
 		header,
 		line_size,
 		SV_fmt, 
-		(int) headers->pointer[0].count,
-		headers->pointer[0].pointer
+		(int) req->headers->pointer[0].count,
+		req->headers->pointer[0].pointer
 	);
 	
 	StringView svh = sv(header);
 	StringView fsvh = split_by_delim(&svh, 0x20);
 	StringView path = split_by_delim(&svh, 0x20);
 
-	SV_to_memory(req.method, REQ_METHOD_SIZE, &fsvh);
-	SV_to_memory(req.path, REQ_PATH_SIZE, &path);
-	SV_to_memory(req.http_version, REQ_HTTP_VERSION_SIZE, &svh);
+	SV_to_memory(req->method, REQ_METHOD_SIZE, &fsvh);
+	SV_to_memory(req->path, REQ_PATH_SIZE, &path);
+	SV_to_memory(req->http_version, REQ_HTTP_VERSION_SIZE, &svh);
 
-	return req;
+	free(header);
+	return 0;
 }
 
-LIMArray parse_request_headers(
+LIMArray find_header_bounds(
 	char *req
 ) {
 	StringView s = sv(req);
+	
 	LIMArray lim_array = lima(NULL, 0, 0);
 	int last_line = 0;
 	
@@ -496,7 +536,7 @@ LIMArray parse_request_headers(
 }
 
 // Returns a pointer to the start of the body
-char *recv_req_chunks(
+char *recv_header_chunks(
 	int *client_fd,
 	char *req
 ) {
@@ -530,7 +570,32 @@ char *recv_req_chunks(
 	return mmp + 4; // pointer to start of body
 }
 
-void accept_tcp_connections(
+int fill_http_request(
+	int *client_fd,
+	HTTPRequest *req
+) {
+	// Receive chunks until the body \r\n\r\n
+	char *headers = xmalloc(CLIENT_BUF_SIZE);
+	char *body_pointer = recv_header_chunks(client_fd, headers);
+	if (body_pointer == NULL) {
+		printf("Failed to receive request.\n");
+		return -1;
+	}
+
+	LIMArray lim_array = find_header_bounds(headers);
+	if (lim_array.count == 0) {
+		printf("Failed to find any header info.\n");
+		return -1;
+	}
+
+	req->headers = xmalloc(sizeof(LIMArray));
+	if (req->headers == NULL) return -1;
+
+	*req->headers = lim_array;
+	return filter_path_method_version(req);
+}
+
+void request_response_cycle(
 	int sfd,
 	struct sockaddr * restrict peer_addr,
 	socklen_t *peer_addrlen
@@ -550,40 +615,38 @@ void accept_tcp_connections(
 		// Set a default timeout on the client sending bytes to server.
 		setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, tv_size);
 
-		// should be dynamically allocated
-		char req[CLIENT_BUF_SIZE];
-		char *rr = recv_req_chunks(&client_fd, req);
-		if (rr == NULL) {
-			printf("Failed to receive request.\n");
-			send_json_response(&client_fd, 400, "{\"error\": \"Bad Request\"}");
+		#define ERROR() send_json_response(&client_fd, 400, "{\"error\": \"Bad Request\"");
+
+		HTTPRequest http_request = {0};
+		if (fill_http_request(&client_fd, &http_request) == -1) {
+			ERROR();
+			freeHTTPRequest(&http_request); // Calls freelima()
 			continue;
-		}
+		}	
 
-		LIMArray lim_array = parse_request_headers(req);
-		if (lim_array.count == 0) {
-			printf("Failed to find any header info.\n");
-			send_json_response(&client_fd, 400, "{\"error\": \"Bad Request\"}");
-			freelima(&lim_array);
-			continue;
-		}
-
-		// creates the http request that will be passed to create http_response
-		HTTPRequest http_request = create_http_request(&lim_array);
-
-		// 0x2f = /
-
-		// block post method
 		if (strcmp(http_request.method, "POST\0") == 0) {
-			send_json_response(&client_fd, 400, "{\"error\": \"Bad Request\", \"message\": \"We don't accept these..yet!\"}");
+			ERROR();
+			freeHTTPRequest(&http_request); // Calls freelima()
 			continue;
 		}
 
+		// = {0} saves us here, but I wanna figure it out
+		HTTPResponse http_response/* = {0} */;
+		if (fill_http_response(&http_request, &http_response) == -1) {
+			ERROR();
+			freeHTTPRequest(&http_request);
+			freeHTTPResponse(&http_response);
+			continue;
+		}
 
-		HTTPResponse http_response = create_http_response(&http_request);
-
+		// TODO Worry about path traversal ./../
+		// seems to be blocked since the path is forced to public/
 		send_stream_file(&client_fd, http_request.path);
-		
+	
+		/* Calls freelima(...) for lim_array. 
+		lim_array is attached inside fill_http_request(...) */
 		freeHTTPRequest(&http_request);
+		freeHTTPResponse(&http_response); 
 	}
 }
 
@@ -652,7 +715,7 @@ int tcp_server(
 	}
 	
 	printf("Server listening on port %s\n", port);
-	accept_tcp_connections(sfd, (struct sockaddr*)&peer_addr, &peer_addrlen);
+	request_response_cycle(sfd, (struct sockaddr*)&peer_addr, &peer_addrlen);
 }
 
 int main(int argc, char **argv) {
@@ -662,10 +725,8 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	if (tcp_server(argv[1]) == -1) {
-		printf("Failed to start server.");
-		exit(EXIT_FAILURE);	
-	}
+	if (tcp_server(argv[1]) == -1) 
+		exit(EXIT_FAILURE);
 
 	printf("Process exited cleanly.");	
 	return 0;
