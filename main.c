@@ -201,6 +201,7 @@ void freelima(
 typedef struct {
 	LIMArray *headers;
 	LineInMemory *body; // TODO
+	long double content_length;
 	char method[REQ_METHOD_SIZE];
 	char path[REQ_PATH_SIZE];
 	char http_version[REQ_HTTP_VERSION_SIZE];
@@ -220,7 +221,7 @@ void freeHTTPRequest(
    ######################### */
 typedef struct {
 	LIMArray *headers;
-	StringView body;
+	StringView body; 
 } HTTPResponse;
 
 void freeHTTPResponse(
@@ -234,12 +235,12 @@ int add_header(
 	char *header 
 ) {
 	// update the size of the body
+	// TODO: #define at TOF
 	size_t header_size = 256;	
 	char *new_header = xmalloc(header_size);
 	if (new_header == NULL) return -1;
 	LineInMemory new_lim = lim(new_header, header_size);
 	arr_append((*htr->headers), new_lim);
-
 	return 0;
 }
 
@@ -330,7 +331,8 @@ int send_stream_file(
 	
 	// TODO: if (the file is an image type, then open as "rb")
 	char *fm = "r";
-	if (0) fm = "rb";
+	// fm = "rb" isn't allowed?	
+	if (0) strcpy(fm, "rb");
 
 	FILE *f = fopen(public_path, fm);
 	
@@ -381,6 +383,15 @@ int send_stream_file(
 	return 0;
 }
 
+void extract_content_length(
+	HTTPRequest *http_request,
+	StringView *value
+) {
+	char *endptr;
+	long double content_length = strtol(value->string, &endptr, 10);
+	http_request->content_length = content_length;
+}
+
 int fill_http_response(
 	HTTPRequest *http_request,
 	HTTPResponse *http_response
@@ -389,8 +400,6 @@ int fill_http_response(
 		0x20: ` `
 		0x3A: `:`
 	*/
-
-	size_t header_size = 256;
 
 	http_response->headers = xmalloc(sizeof(LIMArray));
 	LIMArray lim_array = lima(NULL, 0, 0);   	
@@ -405,10 +414,15 @@ int fill_http_response(
 		};
 	 	
 		StringView key = split_by_delim(&value, 0x3A);
-		trim_by_delim(&value, " ");
-	
+		trim_by_delim(&key, " ");
+		trim_by_delim(&value, " ");	
+		
 		#define HDR(name) strncmp(key.string, name, key.count) == 0
-
+		
+		SV_print(&key, "KEY: ");
+		SV_print(&value, "SVH: ");
+		
+		if (key.count == 0) continue;
 		if (HDR("A-IM")) {}
 		if (HDR("Accept")) {}
 		if (HDR("Accept-Charset")) {}
@@ -421,11 +435,7 @@ int fill_http_response(
 		if (HDR("Cache-Control")) {}
 		if (HDR("Connection")) {}
 		if (HDR("Content-Encoding")) {}
-		if (HDR("Content-Length")) {
-			/* capture the expected content length and cast as int
-			if FUTURE body exceeds this size reject the connection
-			also reject if it exceeds MAX_SIZE (undefined rn) */
-		}
+		if (HDR("Content-Length")) extract_content_length(http_request, &value);
 		if (HDR("Content-MD5")) {}
 		if (HDR("Content-Type")) {}
 		if (HDR("Cookie")) {}
@@ -433,9 +443,7 @@ int fill_http_response(
 		if (HDR("Expect")) {}
 		if (HDR("Forwarded")) {}
 		if (HDR("From")) {}
-		if (HDR("Host")) {
-			SV_print(&value, "SVH: ");
-		}
+		if (HDR("Host")) {}
 		if (HDR("HTTP2-Settings")) {}
 		if (HDR("If-Match")) {}
 		if (HDR("If-Modified-Since")) {}
@@ -483,7 +491,7 @@ int fill_http_response(
 	return 0;
 }
 
-int filter_path_method_version(
+int extract_path_method_version(
 	HTTPRequest *req
 ) {
 	size_t line_size = 256;
@@ -592,7 +600,7 @@ int fill_http_request(
 	if (req->headers == NULL) return -1;
 
 	*req->headers = lim_array;
-	return filter_path_method_version(req);
+	return extract_path_method_version(req);
 }
 
 void request_response_cycle(
@@ -624,20 +632,23 @@ void request_response_cycle(
 			continue;
 		}	
 
+		/*
 		if (strcmp(http_request.method, "POST\0") == 0) {
 			ERROR();
 			freeHTTPRequest(&http_request); // Calls freelima()
 			continue;
 		}
+		*/
 
-		// = {0} saves us here, but I wanna figure it out
-		HTTPResponse http_response/* = {0} */;
+		HTTPResponse http_response = {0};
 		if (fill_http_response(&http_request, &http_response) == -1) {
 			ERROR();
 			freeHTTPRequest(&http_request);
 			freeHTTPResponse(&http_response);
 			continue;
 		}
+
+		#undef ERROR
 
 		// TODO Worry about path traversal ./../
 		// seems to be blocked since the path is forced to public/
@@ -659,7 +670,7 @@ int initiate_server(
 	char *port
 ) {
 	ssize_t nread;
-	struct addrinfo *result, *rp;
+	struct addrinfo *result = {0}, *rp = {0};
 	int s;
 
 	s = getaddrinfo(NULL, port, h, &result);
@@ -691,10 +702,10 @@ int initiate_server(
 int tcp_server(
 	char *port
 ) {
-	struct addrinfo h;
+	struct addrinfo h = {0};
 	int sfd;
 	socklen_t peer_addrlen = sizeof(struct sockaddr_storage);
-	struct sockaddr_storage peer_addr;
+	struct sockaddr_storage peer_addr = {0};
 
 	memset(&h, 0, sizeof(h));
 	h.ai_flags = AI_PASSIVE; // int
@@ -716,6 +727,7 @@ int tcp_server(
 	
 	printf("Server listening on port %s\n", port);
 	request_response_cycle(sfd, (struct sockaddr*)&peer_addr, &peer_addrlen);
+	return 0;
 }
 
 int main(int argc, char **argv) {
