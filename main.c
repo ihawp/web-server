@@ -16,11 +16,12 @@ TODO:
 */
 
 // TODO: Organize and label better
-#define CLIENT_BUF_SIZE 8000
+#define CLIENT_BUF_SIZE 2048
 #define CHUNK_SIZE 512
 #define RESPONSE_BUF_SIZE 512
 #define PATH_SIZE 256
 #define CHAR_SIZE sizeof(char)
+#define MAX_CONTENT_LENGTH 4096
 
 // HTTPRequest
 #define REQ_METHOD_SIZE 16
@@ -45,7 +46,9 @@ TODO:
 	(arr).pointer[(arr).count - 1] = item; \
 } \
 
-void *xmalloc(size_t size) {
+void *xmalloc(
+	size_t size
+) {
 	void *ptr = malloc(size);
 	if (ptr == NULL) {
 		printf("Failed to allocate memory.\n");
@@ -62,7 +65,9 @@ typedef struct {
 	size_t count;
 } StringView;
 
-StringView sv(char *string) {
+StringView sv(
+	char *string
+) {
 	return (StringView) {
 		.string = string,
 		.count = strlen(string) 
@@ -101,9 +106,9 @@ void remove_from_right(
 
 void delim_from_left(
 	StringView *sv,
-	char *delim
+	char delim
 ) {
-	while (sv->string[0] == *delim) {
+	while (sv->string[0] == delim) {
 		sv->string += 1;
 		sv->count -= 1;
 	}	
@@ -111,16 +116,16 @@ void delim_from_left(
 
 void delim_from_right(
 	StringView *sv,
-	char *delim
+	char delim
 ) {
-	while (sv->string[sv->count - 1] == *delim) {
+	while (sv->string[sv->count - 1] == delim) {
 		sv->count -= 1;
 	}
 }
 
 void trim_by_delim(
 	StringView *sv,
-	char *delim
+	char delim
 ) {
 	delim_from_left(sv, delim);
 	delim_from_right(sv, delim);
@@ -200,7 +205,7 @@ void freelima(
    ######################### */
 typedef struct {
 	LIMArray *headers;
-	LineInMemory *body; // TODO
+	char *body;
 	long double content_length;
 	char method[REQ_METHOD_SIZE];
 	char path[REQ_PATH_SIZE];
@@ -236,7 +241,7 @@ int add_header(
 ) {
 	// update the size of the body
 	// TODO: #define at TOF
-	size_t header_size = 256;	
+	size_t header_size = 256;
 	char *new_header = xmalloc(header_size);
 	if (new_header == NULL) return -1;
 	LineInMemory new_lim = lim(new_header, header_size);
@@ -332,10 +337,11 @@ int send_stream_file(
 	// TODO: if (the file is an image type, then open as "rb")
 	char *fm = "r";
 	// fm = "rb" isn't allowed?	
-	if (0) strcpy(fm, "rb");
+	if (strncmp(content_type, "image", 5) == 0) { 
+		fm = "rb";
+	}
 
 	FILE *f = fopen(public_path, fm);
-	
 	if (f == NULL) {
 		send_json_response(client_fd, 404, "{\"error\": \"Not Found\"}");
 		return -1;
@@ -368,12 +374,13 @@ int send_stream_file(
 				"%x\r\n", 
 				byte_count
 			);
-			
-			send(*client_fd, hex_header, hex_header_len, 0); // send the chunk hex header
-			send(*client_fd, buffer, byte_count + 2, 0); // +2 for \r\n chars
+			// send the chunk hex header	
+			send(*client_fd, hex_header, hex_header_len, 0);
+	
+			// +2 for \r\n chars
+			send(*client_fd, buffer, byte_count + 2, 0);
 		}
 
-		// if EOF (end of file) then send the terminating ASCII 0 literal	
 		if (feof(f) != 0) break;
 	}
 	
@@ -392,18 +399,20 @@ void extract_content_length(
 	http_request->content_length = content_length;
 }
 
-int fill_http_response(
+int double_pass_headers(
 	HTTPRequest *http_request,
 	HTTPResponse *http_response
 ) {
-	/* 
-		0x20: ` `
-		0x3A: `:`
-	*/
-
+	//	0x20: ` `
+	//	0x3A: `:`
 	http_response->headers = xmalloc(sizeof(LIMArray));
-	LIMArray lim_array = lima(NULL, 0, 0);   	
+	LIMArray lim_array = {0};
 	*http_response->headers = lim_array; 
+
+	/* As I see it, some values need to be stored, some need 
+	to be viewed and reflected in our response block (some 
+	in keys for hints later, some just as headers through 
+	use of send(...)?) */
 
 	for (int i = 0; i < http_request->headers->count; i++) {
 		if (i == 0) continue;
@@ -414,14 +423,11 @@ int fill_http_response(
 		};
 	 	
 		StringView key = split_by_delim(&value, 0x3A);
-		trim_by_delim(&key, " ");
-		trim_by_delim(&value, " ");	
+		trim_by_delim(&key, 0x20);
+		trim_by_delim(&value, 0x20);	
 		
 		#define HDR(name) strncmp(key.string, name, key.count) == 0
-		
-		SV_print(&key, "KEY: ");
-		SV_print(&value, "SVH: ");
-		
+
 		if (key.count == 0) continue;
 		if (HDR("A-IM")) {}
 		if (HDR("Accept")) {}
@@ -435,7 +441,12 @@ int fill_http_response(
 		if (HDR("Cache-Control")) {}
 		if (HDR("Connection")) {}
 		if (HDR("Content-Encoding")) {}
-		if (HDR("Content-Length")) extract_content_length(http_request, &value);
+
+		if (HDR("Content-Length")) {
+			extract_content_length(http_request, &value);
+			continue;
+		}
+
 		if (HDR("Content-MD5")) {}
 		if (HDR("Content-Type")) {}
 		if (HDR("Cookie")) {}
@@ -459,7 +470,11 @@ int fill_http_response(
 		if (HDR("Referer")) {}
 		if (HDR("TE")) {}
 		if (HDR("Trailer")) {}
-		if (HDR("Transfer-Encoding")) {}
+		
+		if (HDR("Transfer-Encoding")) {
+			continue;
+		}
+
 		if (HDR("User-Agent")) {}
 		if (HDR("Upgrade")) {}
 		if (HDR("Via")) {}
@@ -523,7 +538,7 @@ LIMArray find_header_bounds(
 ) {
 	StringView s = sv(req);
 	
-	LIMArray lim_array = lima(NULL, 0, 0);
+	LIMArray lim_array = {0};
 	int last_line = 0;
 	
 	for (int i = 0; i < s.count; i++) {
@@ -543,39 +558,81 @@ LIMArray find_header_bounds(
 	return lim_array;
 }
 
-// Returns a pointer to the start of the body
-char *recv_header_chunks(
+int recv_chunks(
 	int *client_fd,
-	char *req
+	char *buffer,
+	size_t *total,
+	size_t *buffer_size
+) {
+	ssize_t recv_count = recv(*client_fd, buffer + *total, *buffer_size - *total - 1, 0);
+	if (recv_count <= 0) return -1;
+	*total += recv_count;
+	return 0;
+}
+
+int recv_body_chunks(
+	int *client_fd,
+	char **buffer,
+	size_t buffer_size
+) {
+	if (buffer_size <= 0 || buffer_size >= MAX_CONTENT_LENGTH)
+		return -1;
+
+	*buffer = xmalloc(buffer_size + 1);
+	if (*buffer == NULL) return -1;
+
+	size_t total = 0;
+
+	for (;;) {
+		printf("TOTAL: %ld\n", total);
+		printf("BUFFER_SIZE: %ld\n", buffer_size);
+		if (total >= buffer_size) break;
+
+		int chunk_result = recv_chunks(
+			client_fd,
+			*buffer,
+			&total,
+			&buffer_size
+		);
+
+		if (chunk_result == -1) {
+			if (total == 0) {
+				free(*buffer);
+				*buffer = NULL;
+				return -1;
+			}
+			break;
+		}
+	}
+
+	(*buffer)[total] = '\0';
+	return 0;
+}
+
+int recv_header_chunks(
+	int *client_fd,
+	char *buffer
 ) {
 	ssize_t nn_count = 0;
-	char *mmp = NULL;
-/*
-	struct pollfd fds[1];
-	fds[0].fd = *client_fd;
-	fds[0].events = POLLIN;
-	nfds_t nfds = 1;
+	size_t max_header_size = CLIENT_BUF_SIZE;
 
-	if (poll(fds, nfds, 250) < 0) {
-		printf("Closed (%d) with poll(...)\n", *client_fd);
-		return NULL; 
-	}
-*/
-
-	// search for the terminator 2 now in theatres
 	for (;;) {   
- 		ssize_t nn = recv(*client_fd, req + nn_count, CLIENT_BUF_SIZE - 1 - nn_count, 0);
+		if (recv_chunks(
+			client_fd,
+			buffer,
+			&nn_count,
+			&max_header_size
+		) == -1) return -1;
 
-		// -1 or 0
-		if (nn <= 0) return NULL;
-	
-		nn_count += nn;
-		mmp = memmem(req, nn_count, "\r\n\r\n", 4);
-		if (mmp != NULL) break; // found the header terminator
+		char *mmp = memmem(buffer, nn_count, "\r\n\r\n", 4);
+		
+		// Found the header terminator
+		if (mmp != NULL) break;
 	}
 
-	req[nn_count] = '\0'; // add null terminator to end of string
-	return mmp + 4; // pointer to start of body
+	// Add null terminator to end of string
+	buffer[nn_count] = '\0';
+	return 0;
 }
 
 int fill_http_request(
@@ -584,8 +641,8 @@ int fill_http_request(
 ) {
 	// Receive chunks until the body \r\n\r\n
 	char *headers = xmalloc(CLIENT_BUF_SIZE);
-	char *body_pointer = recv_header_chunks(client_fd, headers);
-	if (body_pointer == NULL) {
+	int rhc_success = recv_header_chunks(client_fd, headers);
+	if (rhc_success == -1) {
 		printf("Failed to receive request.\n");
 		return -1;
 	}
@@ -608,8 +665,23 @@ void request_response_cycle(
 	struct sockaddr * restrict peer_addr,
 	socklen_t *peer_addrlen
 ) {
-	struct timeval tv = { .tv_sec = 0, .tv_usec = 50000 }; // 50ms
+	struct timeval tv = { 
+		.tv_sec = 0,
+		.tv_usec = 500000
+	}; // 50ms
 	int tv_size = sizeof(tv);
+/*
+	struct pollfd fds[1];
+	fds[0].fd = *client_fd;
+	fds[0].events = POLLIN;
+	nfds_t nfds = 1;
+
+	if (poll(fds, nfds, 250) < 0) {
+		printf("Closed (%d) with poll(...)\n", *client_fd);
+		return NULL; 
+	}
+*/
+
 
 	// REQUEST / RESPONSE CYCLE
 	for (;;) {
@@ -623,39 +695,37 @@ void request_response_cycle(
 		// Set a default timeout on the client sending bytes to server.
 		setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, tv_size);
 
-		#define ERROR() send_json_response(&client_fd, 400, "{\"error\": \"Bad Request\"");
-
 		HTTPRequest http_request = {0};
+		HTTPResponse http_response = {0};
+
+		#define ERROR() send_json_response(&client_fd, 400, "{\"error\": \"Bad Request\"");
+		#define FREE(req, res) { \
+			ERROR(); \
+			freeHTTPRequest((req)); \
+			freeHTTPResponse((res)); \
+			continue; \
+		} \
+	
 		if (fill_http_request(&client_fd, &http_request) == -1) {
-			ERROR();
-			freeHTTPRequest(&http_request); // Calls freelima()
-			continue;
+			FREE(&http_request, &http_response);
 		}	
 
-		/*
-		if (strcmp(http_request.method, "POST\0") == 0) {
-			ERROR();
-			freeHTTPRequest(&http_request); // Calls freelima()
-			continue;
-		}
-		*/
-
-		HTTPResponse http_response = {0};
-		if (fill_http_response(&http_request, &http_response) == -1) {
-			ERROR();
-			freeHTTPRequest(&http_request);
-			freeHTTPResponse(&http_response);
-			continue;
+		if (double_pass_headers(&http_request, &http_response) == -1) {
+			FREE(&http_request, &http_response);
 		}
 
-		#undef ERROR
+		// POST, PUT, PATCH
+		if (strcmp(http_request.method, "POST") == 0) {
+			if (recv_body_chunks(
+				&client_fd,
+				&http_request.body,
+				(size_t) http_request.content_length	
+			) == -1) FREE(&http_request, &http_response);
+			printf("BODY: %s\n", http_request.body);
+		}
 
-		// TODO Worry about path traversal ./../
-		// seems to be blocked since the path is forced to public/
 		send_stream_file(&client_fd, http_request.path);
-	
-		/* Calls freelima(...) for lim_array. 
-		lim_array is attached inside fill_http_request(...) */
+
 		freeHTTPRequest(&http_request);
 		freeHTTPResponse(&http_response); 
 	}
@@ -730,8 +800,10 @@ int tcp_server(
 	return 0;
 }
 
-int main(int argc, char **argv) {
-	
+int main(
+	int argc, 
+	char **argv
+) {	
 	if (argc < 2) {
 		printf("Command failed, use:\n\nserver <PORT>\n");
 		return 1;
