@@ -9,6 +9,7 @@ class Manager {
         start.addEventListener('click', this.start.bind(this));
         stop.addEventListener('click', this.stopRunning.bind(this));
         reset.addEventListener('click', this.reset.bind(this));
+        this.output = document.getElementById('output');
 
         this.totalTime = 0;
         this.startTime = 0;
@@ -32,13 +33,16 @@ class Manager {
         this.stopRunning();
         this.endTime = Date.now();
         this.totalTime += this.endTime - this.startTime;
-        console.log(`Total Time (${this.i + this.total}): ${this.totalTime}`);
+        let theString = `Total Time (${this.i + this.total}): ${this.totalTime}`;
+        this.output.innerText = theString;
+        console.log(theString);
     }
 
     reset = () => {
         this.stop();
         this.i = 0;
         this.totalTime = 0;
+        this.output.innerText = "";
         this.drawer.reset();
     }
 
@@ -62,7 +66,6 @@ class Manager {
     async run() {
         while (this.running && this.i + this.total < this.amount) {
             this.drawer.draw(await this.makeFetch(this.url));
-            console.log(this.i);
             this.i++;
         }
         this.stop();

@@ -45,6 +45,11 @@ button {
 	color: white;
 }
 
+#output {
+	position: fixed;
+	bottom: 10px;
+}
+
 #start {
 	left: 0;
 	background-color: green;
@@ -58,4 +63,8 @@ button {
 #reset {
 	left: 400px;
 	background-color: black;
+}
+
+#output {
+	left: 610px;
 }
