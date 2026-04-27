@@ -37,3 +37,25 @@ ul {}
 li {}
 
 
+button {
+	position: fixed;
+	width: 200px;
+	height: 75px;
+	bottom: 0;
+	color: white;
+}
+
+#start {
+	left: 0;
+	background-color: green;
+}
+
+#stopp {
+	left: 200px;
+	background-color: red;
+}
+
+#reset {
+	left: 400px;
+	background-color: black;
+}
