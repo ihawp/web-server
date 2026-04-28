@@ -5,8 +5,8 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <pthread.h>
-// #include <sys/epoll.h>
-#include "string_view.h" // use `gcc -iquote headers/` to include all headers
+#include <sys/epoll.h>
+#include "string_view.h"
 #include "line_in_memory_array.h"
 #include "program_speed.h"
 #include "http_request.h"
@@ -130,7 +130,7 @@ int send_stream_file(
 		"HTTP/1.1 %d %s\r\n"
 		"Content-Type: %s\r\n"
 		"Transfer-Encoding: chunked\r\n"
-		"Connection: close\r\n"
+		"Connection: keep-alive\r\n"
 		"\r\n",
 		http_response->status,
 		http_status_str(http_response->status),
@@ -164,7 +164,7 @@ int send_stream_file(
 	
 	fclose(f);
 	send(*client_fd, "0\r\n\r\n", 5, 0);
-	// shutdown(*client_fd, SHUT_WR);
+	shutdown(*client_fd, SHUT_WR);
 	return 0;
 }
 
@@ -556,6 +556,12 @@ int main(
 		exit(1);
 	}
 	printf("Server listening on port %s\n", port);
+
+
+	int epc = epoll_create();
+
+
+
 
 	ListNodeManager queue = {0};
 	pthread_mutex_init(&queue.lock, NULL);
