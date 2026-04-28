@@ -38,12 +38,25 @@ ul {}
 li {}
 
 
-button {
+#menu {
 	position: fixed;
-	width: 200px;
-	height: 75px;
 	bottom: 0;
+	height: 75px;
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	gap: 4px;
+	background-color: white;
+	width: 100%;
+}
+
+button {
+	width: 200px;
+	height: 100%;
 	color: white;
+	border-radius: 8px;
+	border: none;
+	cursor: pointer;
 }
 
 #output {
@@ -52,17 +65,14 @@ button {
 }
 
 #start {
-	left: 0;
 	background-color: green;
 }
 
 #stopp {
-	left: 200px;
 	background-color: red;
 }
 
 #reset {
-	left: 400px;
 	background-color: black;
 }
 

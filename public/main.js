@@ -36,7 +36,6 @@ class Manager {
         this.totalTime += this.endTime - this.startTime;
         let theString = `Total Time (${this.i + this.total}): ${this.totalTime}`;
         this.output.innerText = theString;
-        console.log(theString);
     }
 
     reset = () => {
@@ -82,7 +81,7 @@ class Drawer {
         this.responses = []; // track responses?
 
         this.ww = window.innerWidth;
-        this.wh = window.innerHeight;
+        this.wh = window.innerHeight - 75;
         this.canvas.width = this.ww;
         this.canvas.height = this.wh;
 
@@ -104,9 +103,9 @@ class Drawer {
         }
 
         if (item) {
-            this.context.fillStyle = 'green';
+            this.context.fillStyle = '#B2AC88';
         } else {
-            this.context.fillStyle = 'red';
+            this.context.fillStyle = '#DC143C';
         }
 
         this.context.fillRect(this.drawX, this.drawY, this.width, this.height);

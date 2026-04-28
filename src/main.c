@@ -119,18 +119,21 @@ int send_stream_file(
 		http_response->status = 404;
 		send_stream_file(client_fd, http_request, http_response);
 		return -1;
+	} else {
+		http_response->status = 200;
 	}
 
 	char response[CHUNK_SIZE];
 	int response_len = snprintf(
 		response, 
 		sizeof(response), 
-		"HTTP/1.1 %d OK\r\n"
+		"HTTP/1.1 %d %s\r\n"
 		"Content-Type: %s\r\n"
 		"Transfer-Encoding: chunked\r\n"
-		"Connection: close\r\n"
+		"Connection: keep-alive\r\n"
 		"\r\n",
 		http_response->status,
+		http_status_str(http_response->status),
 		content_type
 	);
 	send(*client_fd, response, response_len, 0);
@@ -139,7 +142,7 @@ int send_stream_file(
 		// -2 incase max chars available (for \r\n characters at end of chunk EOC)
 		int byte_count = fread(buffer, CHAR_SIZE, CHUNK_SIZE - 2, f);
 	
-		if (byte_count) {	
+		if (byte_count) {
 			memcpy(buffer + byte_count, "\r\n", 2);	
 
 			char hex_header[16];
@@ -161,10 +164,11 @@ int send_stream_file(
 	
 	fclose(f);
 	send(*client_fd, "0\r\n\r\n", 5, 0);
+	shutdown(*client_fd, SHUT_WR);
 	return 0;
 }
 
-int double_pass_headers(
+int parse_headers(
 	HTTPRequest *http_request,
 	HTTPResponse *http_response
 ) {
@@ -364,14 +368,13 @@ int recv_header_chunks(
 	return 0;
 }
 
-int fill_http_request(
+int capture_headers(
 	int *client_fd,
 	HTTPRequest *req
 ) {
 	// Receive chunks until the body \r\n\r\n
 	char *headers = xmalloc(CLIENT_BUF_SIZE);
-	int rhc_success = recv_header_chunks(client_fd, headers);
-	if (rhc_success == -1) {
+	if (recv_header_chunks(client_fd, headers) == -1) {
 		printf("Failed to receive request.\n");
 		return -1;
 	}
@@ -395,46 +398,43 @@ void handle_request(
 	HTTPResponse *http_response
 ) {
 
-	#define STOP { \
-		printf("stop"); \
-		send_json_response(client_fd, 400, "{\"error\": \"Failed\", \"success\": false}"); \
-		return; \
-	} \
+	// TODO: Realize why I want a req/res struct (beyond Node.js <3)
 
-	if (fill_http_request(client_fd, http_request) == -1) {
-		STOP
-	}	
+	// create array of pointers/count for each header from buffer
+	if (capture_headers(client_fd, http_request) == -1) {
+		send_json_response(client_fd, 400, "{\"error\": \"fill_http_request handle_request\", \"success\": false}");
+		return;
+	}
 
-	if (double_pass_headers(http_request, http_response) == -1) {
-		STOP
+	// review received headers
+	if (parse_headers(http_request, http_response) == -1) {
+		send_json_response(client_fd, 400, "{\"error\": \"double_pass_headers handle_request\", \"success\": false}");
+		return;
 	}
 
 	if (strcmp(http_request->method, "POST") == 0) {
-		if (recv_body_chunks(
-			client_fd,
-			&http_request->body,
-			(size_t) http_request->content_length
-		) == -1) {
-			STOP
+		if (recv_body_chunks(client_fd, &http_request->body, (size_t) http_request->content_length) == -1) {
+			send_json_response(client_fd, 400, "{\"error\": \"recv_body_chunks handle_request\", \"success\": false}");
+			return;
 		}
 		
 		printf("BODY: %s\n", http_request->body);
 	}
 
-	#undef STOP
-
 	if (strcmp(http_request->method, "GET") == 0) {
+		// handles error
 		send_stream_file(client_fd, http_request, http_response);
 		return;
 	}
 
+	// error, could send 404.html instead
+	send_json_response(client_fd, 400, "{\"error\": \"NO METHOD handle_request\", \"success\": false}");
 }
 
 void *worker(
 	void *queue
 ) {
 	ListNodeManager *manager = queue;
-
 	ProgramSpeed speed = {0};
 	HTTPRequest http_request = {0};
 	HTTPResponse http_response = {0};
@@ -485,19 +485,26 @@ int initiate_server(
 		*sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 		if (*sfd == -1) continue; // failed, try again
 
-		if (setsockopt(*sfd, SOL_SOCKET, SO_REUSEPORT, &opt, opt_size) < 0) {
+		if (setsockopt(*sfd, SOL_SOCKET, SO_REUSEPORT, &opt, opt_size) == -1) {
 			perror("setsockopt SO_REUSEPORT");
 			exit(EXIT_FAILURE);
 		}
 
-		setsockopt(*sfd, SOL_SOCKET, SO_REUSEADDR, &opt, opt_size);
-		setsockopt(*sfd, SOL_SOCKET, SO_RCVTIMEO, &tv, tv_size);
+		if (setsockopt(*sfd, SOL_SOCKET, SO_REUSEADDR, &opt, opt_size) == -1) {
+			perror("setsockopt SO_REUSEADDR");
+			exit(EXIT_FAILURE);
+		}
+
+		if (setsockopt(*sfd, SOL_SOCKET, SO_RCVTIMEO, &tv, tv_size) == -1) {
+			perror("setsockopt SO_RCVTIMEO");
+			exit(EXIT_FAILURE);
+		}
 
 		int bs = bind(*sfd, rp->ai_addr, rp->ai_addrlen);
 		if (bs == 0) break; // success, stop
 		
 		close(*sfd);
-	} 
+	}
 
 	freeaddrinfo(result);
 
@@ -532,7 +539,7 @@ int tcp_server(
 }
 
 int main(
-	int argc, 
+	int argc,
 	char **argv
 ) {	
 	if (argc < 2) {
@@ -541,7 +548,6 @@ int main(
 	}
 
 	char *port = argv[1];
-	
 	int sfd = tcp_server(port);
 	if (sfd == -1) exit(1);
 
