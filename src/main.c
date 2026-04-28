@@ -22,75 +22,6 @@
 #define CHAR_SIZE sizeof(char)
 #define MAX_CONTENT_LENGTH 4096
 
-// HEADERS
-
-const char *http_status_str(
-	int code
-);
-
-void send_json_response(
-	int *client_fd,
-	int status,
-	char *error_message	
-);
-
-int send_stream_file(
-	int *client_fd,
-	char *path
-);
-
-int double_pass_headers(
-	HTTPRequest *http_request,
-	HTTPResponse *http_response
-);
-
-char *file_to_content_type(
-	char *path
-);
-
-int extract_path_method_version(
-	HTTPRequest *req
-);
-
-int recv_chunks(
-	int *client_fd,
-	char *buffer,
-	size_t *total,
-	size_t *buffer_size
-);
-
-int recv_body_chunks(
-	int *client_fd,
-	char **buffer,
-	size_t buffer_size
-);
-
-int recv_header_chunks(
-	int *client_fd,
-	char *buffer
-);
-
-int fill_http_request(
-	int *client_fd,
-	HTTPRequest *req
-);
-
-void request_response_cycle(
-	int sfd,
-	struct sockaddr * restrict peer_addr,
-	socklen_t *peer_addrlen
-);
-
-int initiate_server(
-	struct addrinfo *h,
-	int *sfd,
-	char *port
-);
-
-int tcp_server(
-	char *port
-);
-
 /* ########################## 
             SERVER
    ######################### */
@@ -470,9 +401,8 @@ int fill_http_request(
 	return extract_path_method_version(req);
 }
 
-#define ERROR() send_json_response(&client_fd, 400, "{\"error\": \"Bad Request\", \"success\": false}");
 #define FREE(req, res, speed) { \
-	ERROR(); \
+	send_json_response(&client_fd, 400, "{\"error\": \"Bad Request\", \"success\": false}"); \
 	freeHTTPRequest((req)); \
 	freeHTTPResponse((res)); \
 	end((speed)); \
@@ -480,12 +410,14 @@ int fill_http_request(
 } \
 
 void request_response_cycle(
-	int sfd,
-	struct sockaddr * restrict peer_addr,
-	socklen_t *peer_addrlen
+	int *sfd
 ) {
+
+	struct sockaddr_storage peer_addr = {0};
+	socklen_t peer_addrlen = sizeof(struct sockaddr_storage);
+
 	for (;;) {
-		int client_fd = accept(sfd, peer_addr, peer_addrlen);
+		int client_fd = accept(*sfd, (struct sockaddr*) &peer_addr, (socklen_t*) &peer_addrlen);
 		if (client_fd == -1) continue;
 
 		ProgramSpeed speed;
@@ -549,6 +481,8 @@ int initiate_server(
 		*sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 		if (*sfd == -1) continue; // failed, try again
 
+		int opt = 1;
+		setsockopt(*sfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 		setsockopt(*sfd, SOL_SOCKET, SO_RCVTIMEO, &tv, tv_size);
 
 		int bs = bind(*sfd, rp->ai_addr, rp->ai_addrlen);
@@ -570,11 +504,8 @@ int initiate_server(
 int tcp_server(
 	char *port
 ) {
-	struct addrinfo h = {0};
 	int sfd;
-	socklen_t peer_addrlen = sizeof(struct sockaddr_storage);
-	struct sockaddr_storage peer_addr = {0};
-
+	struct addrinfo h = {0};
 	memset(&h, 0, sizeof(h));
 	h.ai_flags = AI_PASSIVE; // int
 	h.ai_family = AF_UNSPEC; // int
@@ -584,21 +515,12 @@ int tcp_server(
 	h.ai_canonname = NULL; // char
 	h.ai_next = NULL; // struct addrinfo
 
-	if (initiate_server(&h, &sfd, port) == -1)
-		return -1;
-
-	// create thread for listenning?
-	// create 
-
-	// param 2 = backlog; ...how many requests can queue up before ECONNREFUSED or manual queueing.
-	if (listen(sfd, 50) == -1) {
-		printf("Failed to listen.\n");
+	if (initiate_server(&h, &sfd, port) == -1) {
 		return -1;
 	}
-	
+
 	printf("Server listening on port %s\n", port);
-	request_response_cycle(sfd, (struct sockaddr*)&peer_addr, &peer_addrlen);
-	return 0;
+	return sfd;
 }
 
 int main(
@@ -607,20 +529,18 @@ int main(
 ) {	
 	if (argc < 2) {
 		printf("Server startup failed, try:\n\n<Server Name> <PORT>\n");
-		return 1;
+		exit(1);
+	}
+	
+	int sfd = tcp_server(argv[1]);
+	if (sfd == -1) exit(1);
+
+	if (listen(sfd, 50) == -1) {
+		printf("Failed to listen.\n");
+		exit(1);
 	}
 
-	// this is useless usecase
-	/*
-
-	pthread_t thread_tcp_server;
-	pthread_create(&thread_tcp_server, NULL, tcp_server, NULL);
-	
-	*/
-	
-	if (tcp_server(argv[1]) == -1) { 
-		exit(EXIT_FAILURE);
-	}
+	request_response_cycle(&sfd);
 
 	return 0;
 }

@@ -42,6 +42,7 @@ class Manager {
         this.stop();
         this.i = 0;
         this.totalTime = 0;
+        this.total = 0;
         this.output.innerText = "";
         this.drawer.reset();
     }

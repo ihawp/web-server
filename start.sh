@@ -7,11 +7,6 @@ i=0;
 if [ $? -ne 0 ]; then
     echo 'Compilation failed'
 else
-    for ((i=3000; i<3009; i++)); do
-        build/server $i
-        if [$? -ne 1]; then
-            break;
-        fi
-    done
+    build/server 3010
     wait
 fi
