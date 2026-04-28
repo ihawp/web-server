@@ -17,6 +17,7 @@ class Manager {
     }
 
     start = (event) => {
+        if (this.running) return;
         // reset the counter for printing time and amount of requests
         if (this.i > 0) {
             this.total += this.i;

@@ -23,6 +23,7 @@ body {
 	background-color: var(--background);
 	font-size: var(--font-size);
 	color: var(--secondary);
+	overflow: hidden;
 }
 
 h1 {}

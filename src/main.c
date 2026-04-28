@@ -13,12 +13,13 @@
 #include "http_response.h"
 #include "xmalloc.h"
 #include "array_append.h"
+#include "list_node.h"
 
 // TODO: Organize and label better
 #define CLIENT_BUF_SIZE 2048
 #define CHUNK_SIZE 512
 #define RESPONSE_BUF_SIZE 512
-#define PATH_SIZE 256
+#define PATH_SIZE 512
 #define CHAR_SIZE sizeof(char)
 #define MAX_CONTENT_LENGTH 4096
 
@@ -74,7 +75,6 @@ void send_json_response(
 	);
 
 	send(*client_fd, message, message_length, 0);
-	close(*client_fd);
 }
 
 char *file_to_content_type(
@@ -95,17 +95,18 @@ char *file_to_content_type(
 
 int send_stream_file(
 	int *client_fd,
-	char *path
+	HTTPRequest *http_request,
+	HTTPResponse *http_response
 ) {
-	if (strcmp(path, "/\0") == 0) {
-		path = "index.html";
+	if (strcmp(http_request->path, "/\0") == 0) {
+		strcpy(http_request->path, "index.html");
 	}
 
 	char buffer[CHUNK_SIZE];
 	char public_path[PATH_SIZE];
-	snprintf(public_path, PATH_SIZE, "public/%s", path);
+	snprintf(public_path, PATH_SIZE, "public/%s", http_request->path);
 
-	char *content_type = file_to_content_type(path);
+	char *content_type = file_to_content_type(http_request->path);
 	
 	char *fm = "r";
 	if (strncmp(content_type, "image", 5) == 0) { 
@@ -114,17 +115,9 @@ int send_stream_file(
 
 	FILE *f = fopen(public_path, fm);
 	if (f == NULL) {
-
-		// TODO: remove
-		srand(time(NULL));
-		int random = rand() % 10;
-
-		if (random > 5) {
-			send_json_response(client_fd, 404, "{\"error\": \"Not Found\", \"success\": false}");
-		} else {
-			send_json_response(client_fd, 200, "{\"message\": \"Found it!\", \"success\": true}");
-		}
-
+		strcpy(http_request->path, "404.html");
+		http_response->status = 404;
+		send_stream_file(client_fd, http_request, http_response);
 		return -1;
 	}
 
@@ -132,11 +125,12 @@ int send_stream_file(
 	int response_len = snprintf(
 		response, 
 		sizeof(response), 
-		"HTTP/1.1 200 OK\r\n"
+		"HTTP/1.1 %d OK\r\n"
 		"Content-Type: %s\r\n"
 		"Transfer-Encoding: chunked\r\n"
 		"Connection: close\r\n"
 		"\r\n",
+		http_response->status,
 		content_type
 	);
 	send(*client_fd, response, response_len, 0);
@@ -167,7 +161,6 @@ int send_stream_file(
 	
 	fclose(f);
 	send(*client_fd, "0\r\n\r\n", 5, 0);
-	close(*client_fd);
 	return 0;
 }
 
@@ -192,15 +185,12 @@ int double_pass_headers(
 		StringView key = split_by_delim(&value, 0x3A);
 		trim_by_delim(&key, 0x20);
 		trim_by_delim(&value, 0x20);
-		
+
 		#define HDR(name) strncmp(key.string, name, key.count) == 0
 
 		if (key.count == 0) continue;
 		if (HDR("A-IM")) {}
-		if (HDR("Accept")) {
-			SV_print(&value);
-			continue;
-		}
+		if (HDR("Accept")) {}
 		if (HDR("Accept-Charset")) {}
 		if (HDR("Accept-Datetime")) {}
 		if (HDR("Accept-Encoding")) {}
@@ -325,8 +315,6 @@ int recv_body_chunks(
 	size_t total = 0;
 
 	for (;;) {
-		printf("TOTAL: %ld\n", total);
-		printf("BUFFER_SIZE: %ld\n", buffer_size);
 		if (total >= buffer_size) break;
 
 		int chunk_result = recv_chunks(
@@ -401,56 +389,68 @@ int fill_http_request(
 	return extract_path_method_version(req);
 }
 
-#define FREE(req, res, speed) { \
-	send_json_response(&client_fd, 400, "{\"error\": \"Bad Request\", \"success\": false}"); \
-	freeHTTPRequest((req)); \
-	freeHTTPResponse((res)); \
-	end((speed)); \
-	continue; \
-} \
-
-void request_response_cycle(
-	int *sfd
+void handle_request(
+	int *client_fd,
+	HTTPRequest *http_request,
+	HTTPResponse *http_response
 ) {
 
-	struct sockaddr_storage peer_addr = {0};
-	socklen_t peer_addrlen = sizeof(struct sockaddr_storage);
+	#define STOP { \
+		printf("stop"); \
+		send_json_response(client_fd, 400, "{\"error\": \"Failed\", \"success\": false}"); \
+		return; \
+	} \
+
+	if (fill_http_request(client_fd, http_request) == -1) {
+		STOP
+	}	
+
+	if (double_pass_headers(http_request, http_response) == -1) {
+		STOP
+	}
+
+	if (strcmp(http_request->method, "POST") == 0) {
+		if (recv_body_chunks(
+			client_fd,
+			&http_request->body,
+			(size_t) http_request->content_length
+		) == -1) {
+			STOP
+		}
+		
+		printf("BODY: %s\n", http_request->body);
+	}
+
+	#undef STOP
+
+	if (strcmp(http_request->method, "GET") == 0) {
+		send_stream_file(client_fd, http_request, http_response);
+		return;
+	}
+
+}
+
+void *worker(
+	void *queue
+) {
+	ListNodeManager *manager = queue;
+
+	ProgramSpeed speed = {0};
+	HTTPRequest http_request = {0};
+	HTTPResponse http_response = {0};
 
 	for (;;) {
-		int client_fd = accept(*sfd, (struct sockaddr*) &peer_addr, (socklen_t*) &peer_addrlen);
-		if (client_fd == -1) continue;
+        int client_fd = dequeue(manager);
 
-		ProgramSpeed speed;
+		memset(&http_request, 0, sizeof(http_request));
+		memset(&http_response, 0, sizeof(http_response));
+		memset(&speed, 0, sizeof(speed));
+
 		start(&speed);
-
-		HTTPRequest http_request = {0};
-		HTTPResponse http_response = {0};
-
-		if (fill_http_request(&client_fd, &http_request) == -1) {
-			FREE(&http_request, &http_response, &speed);
-		}	
-
-		if (double_pass_headers(&http_request, &http_response) == -1) {
-			FREE(&http_request, &http_response, &speed);
-		}
-
-		// POST, PUT, PATCH
-		if (strcmp(http_request.method, "POST") == 0) {
-			if (recv_body_chunks(
-				&client_fd,
-				&http_request.body,
-				(size_t) http_request.content_length	
-			) == -1) FREE(&http_request, &http_response, &speed);
-			
-			printf("BODY: %s\n", http_request.body);
-		}
-
-		send_stream_file(&client_fd, http_request.path);
-
-		freeHTTPRequest(&http_request);
-		freeHTTPResponse(&http_response);
-		
+        handle_request(&client_fd, &http_request, &http_response);
 		end(&speed);
+
+		close(client_fd);
 	}
 }
 
@@ -465,11 +465,15 @@ int initiate_server(
 	ssize_t nread;
 	struct addrinfo *result = {0}, *rp = {0};
 	int s;
+
 	struct timeval tv = {
 		.tv_sec = 0,
 		.tv_usec = 50000
 	}; // 50ms
 	int tv_size = sizeof(tv);
+
+	int opt = 1;
+	int opt_size = sizeof(opt);
 
 	s = getaddrinfo(NULL, port, h, &result);
 	if (s != 0) {
@@ -481,8 +485,12 @@ int initiate_server(
 		*sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 		if (*sfd == -1) continue; // failed, try again
 
-		int opt = 1;
-		setsockopt(*sfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+		if (setsockopt(*sfd, SOL_SOCKET, SO_REUSEPORT, &opt, opt_size) < 0) {
+			perror("setsockopt SO_REUSEPORT");
+			exit(EXIT_FAILURE);
+		}
+
+		setsockopt(*sfd, SOL_SOCKET, SO_REUSEADDR, &opt, opt_size);
 		setsockopt(*sfd, SOL_SOCKET, SO_RCVTIMEO, &tv, tv_size);
 
 		int bs = bind(*sfd, rp->ai_addr, rp->ai_addrlen);
@@ -506,6 +514,7 @@ int tcp_server(
 ) {
 	int sfd;
 	struct addrinfo h = {0};
+
 	memset(&h, 0, sizeof(h));
 	h.ai_flags = AI_PASSIVE; // int
 	h.ai_family = AF_UNSPEC; // int
@@ -519,7 +528,6 @@ int tcp_server(
 		return -1;
 	}
 
-	printf("Server listening on port %s\n", port);
 	return sfd;
 }
 
@@ -531,16 +539,33 @@ int main(
 		printf("Server startup failed, try:\n\n<Server Name> <PORT>\n");
 		exit(1);
 	}
+
+	char *port = argv[1];
 	
-	int sfd = tcp_server(argv[1]);
+	int sfd = tcp_server(port);
 	if (sfd == -1) exit(1);
 
-	if (listen(sfd, 50) == -1) {
+	if (listen(sfd, SOMAXCONN) == -1) {
 		printf("Failed to listen.\n");
 		exit(1);
 	}
+	printf("Server listening on port %s\n", port);
 
-	request_response_cycle(&sfd);
+	ListNodeManager queue = {0};
+	pthread_mutex_init(&queue.lock, NULL);
+    pthread_cond_init(&queue.ready, NULL);
+	pthread_t workers[3];
+	for (int i = 0; i < 3; i++) {
+		pthread_create(&workers[i], NULL, (void*) worker, &queue);
+	}
+
+	struct sockaddr_storage peer_addr = {0};
+	socklen_t peer_addrlen = sizeof(struct sockaddr_storage);
+	for (;;) {
+		int client_fd = accept(sfd, (struct sockaddr*) &peer_addr, (socklen_t*) &peer_addrlen);
+		if (client_fd == -1) continue;
+		enqueue(&queue, client_fd);
+	}
 
 	return 0;
 }

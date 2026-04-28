@@ -6,7 +6,8 @@
 
 typedef struct {
 	LIMArray *headers;
-	StringView body; 
+	StringView body;
+	int status;
 } HTTPResponse;
 
 void freeHTTPResponse(
