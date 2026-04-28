@@ -10,6 +10,7 @@ typedef struct ListNode {
 } ListNode;
 
 typedef struct {
+    int epc;
     ListNode *head;
     ListNode *tail;
     pthread_mutex_t lock;

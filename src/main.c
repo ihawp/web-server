@@ -6,6 +6,8 @@
 #include <netdb.h>
 #include <pthread.h>
 #include <sys/epoll.h>
+#include <fcntl.h>
+#include <errno.h>
 #include "string_view.h"
 #include "line_in_memory_array.h"
 #include "program_speed.h"
@@ -13,7 +15,7 @@
 #include "http_response.h"
 #include "xmalloc.h"
 #include "array_append.h"
-#include "list_node.h"
+#include "data.h"
 
 // TODO: Organize and label better
 #define CLIENT_BUF_SIZE 2048
@@ -22,6 +24,10 @@
 #define PATH_SIZE 512
 #define CHAR_SIZE sizeof(char)
 #define MAX_CONTENT_LENGTH 4096
+
+// epoll/threads
+#define MAX_EVENTS 10
+#define MAX_WORKERS 3
 
 /* ########################## 
             SERVER
@@ -93,6 +99,8 @@ char *file_to_content_type(
 	return "application/octet-stream";
 }
 
+
+// This should accept an already open and tested fd, rather than have the 404 loop if f == null and what not.
 int send_stream_file(
 	int *client_fd,
 	HTTPRequest *http_request,
@@ -115,13 +123,11 @@ int send_stream_file(
 
 	FILE *f = fopen(public_path, fm);
 	if (f == NULL) {
-		strcpy(http_request->path, "404.html");
-		http_response->status = 404;
-		send_stream_file(client_fd, http_request, http_response);
+		send_json_response(client_fd, 400, "{\"error\": \"fill_http_request handle_request\", \"success\": false}");
 		return -1;
-	} else {
-		http_response->status = 200;
 	}
+
+	http_response->status = 200;
 
 	char response[CHUNK_SIZE];
 	int response_len = snprintf(
@@ -207,7 +213,7 @@ int parse_headers(
 		if (HDR("Content-Encoding")) {}
 		if (HDR("Content-Length")) {
 			char *endptr;
-			long double content_length = strtol(value.string, &endptr, 10); // convert to base 10
+			long content_length = strtol(value.string, &endptr, 10); // convert to base 10
 			http_request->content_length = content_length;
 			continue;
 		}
@@ -269,7 +275,7 @@ int parse_headers(
 int extract_path_method_version(
 	HTTPRequest *req
 ) {
-	char *header = xmalloc(req->headers->pointer[0].count);
+	char *header = xmalloc(req->headers->pointer[0].count + 1);
 	if (header == NULL) return -1;
 
 	int size = snprintf(
@@ -298,12 +304,16 @@ int recv_chunks(
 	size_t *total,
 	size_t *buffer_size
 ) {
-	ssize_t recv_count = recv(*client_fd, buffer + *total, *buffer_size - *total - 1, 0);
-	if (recv_count <= 0) return -1;
+	ssize_t recv_count = recv(*client_fd, buffer + *total, *buffer_size - *total, 0);
+    if (recv_count <= 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return 1;
+        return -1;
+    }
 	*total += recv_count;
 	return 0;
 }
 
+// TODO: post requests get stuck in here, SEE "oh noes"
 int recv_body_chunks(
 	int *client_fd,
 	char **buffer,
@@ -328,6 +338,10 @@ int recv_body_chunks(
 			&buffer_size
 		);
 
+		printf("Chunk Result: %d\n", chunk_result);
+
+		if (chunk_result == 0) break;
+		if (chunk_result == 1) continue;
 		if (chunk_result == -1) {
 			if (total == 0) {
 				free(*buffer);
@@ -350,13 +364,10 @@ int recv_header_chunks(
 	size_t max_header_size = CLIENT_BUF_SIZE;
 
 	for (;;) {   
-		if (recv_chunks(
-			client_fd,
-			buffer,
-			&nn_count,
-			&max_header_size
-		) == -1) return -1;
 
+		int r = recv_chunks(client_fd, buffer, &nn_count, &max_header_size);
+		if (r == -1) return -1;
+		if (r == 1) continue;
 		char *mmp = memmem(buffer, nn_count, "\r\n\r\n", 4);
 		
 		// Found the header terminator
@@ -375,7 +386,6 @@ int capture_headers(
 	// Receive chunks until the body \r\n\r\n
 	char *headers = xmalloc(CLIENT_BUF_SIZE);
 	if (recv_header_chunks(client_fd, headers) == -1) {
-		printf("Failed to receive request.\n");
 		return -1;
 	}
 
@@ -397,8 +407,6 @@ void handle_request(
 	HTTPRequest *http_request,
 	HTTPResponse *http_response
 ) {
-
-	// TODO: Realize why I want a req/res struct (beyond Node.js <3)
 
 	// create array of pointers/count for each header from buffer
 	if (capture_headers(client_fd, http_request) == -1) {
@@ -431,26 +439,70 @@ void handle_request(
 	send_json_response(client_fd, 400, "{\"error\": \"NO METHOD handle_request\", \"success\": false}");
 }
 
+int setnonblocking(int fd) {
+    int flags = fcntl(fd, F_GETFL);
+    if (flags == -1) return -1;
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
 void *worker(
-	void *queue
+	void *data
 ) {
-	ListNodeManager *manager = queue;
-	ProgramSpeed speed = {0};
+	WorkerData *wd = data;
 	HTTPRequest http_request = {0};
 	HTTPResponse http_response = {0};
+	struct sockaddr_storage peer_addr = {0};
+
+	socklen_t peer_addrlen = sizeof(struct sockaddr_storage);
+	int client_fd, n, ectl, result;
+	struct epoll_event ev, events[MAX_EVENTS];
+	ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
 
 	for (;;) {
-        int client_fd = dequeue(manager);
+		// if nothing, continue;
+		result = epoll_wait(wd->epc, events, MAX_EVENTS, -1);
+		if (result == -1) continue;
 
-		memset(&http_request, 0, sizeof(http_request));
-		memset(&http_response, 0, sizeof(http_response));
-		memset(&speed, 0, sizeof(speed));
+		for (n = 0; n < result; ++n) {
+			if (events[n].data.fd == wd->sfd) {
+				
+				client_fd = accept(wd->sfd, (struct sockaddr*) &peer_addr, (socklen_t*) &peer_addrlen);
+				if (client_fd == -1) {
+					printf("client_fd\n");
+					continue;
+				};
 
-		start(&speed);
-        handle_request(&client_fd, &http_request, &http_response);
-		end(&speed);
+				if (setnonblocking(client_fd) == -1) {
+					printf("blocking\n");
+				}
 
-		close(client_fd);
+				ev.data.fd = client_fd;
+
+				ectl = epoll_ctl(wd->epc, EPOLL_CTL_ADD, client_fd, &ev);
+
+				if (errno == EEXIST) {
+					printf("exist\n");
+				};
+
+				if (ectl == -1) {
+					perror("Failed to epoll_ctl client_fd\n");
+					exit(EXIT_FAILURE);
+				}
+			} else {
+				int fd = events[n].data.fd;
+
+				memset(&http_request, 0, sizeof(http_request));
+				memset(&http_response, 0, sizeof(http_response));
+
+				handle_request(&fd, &http_request, &http_response);
+
+				freeHTTPRequest(&http_request);
+				freeHTTPResponse(&http_response);
+
+				epoll_ctl(wd->epc, EPOLL_CTL_DEL, fd, NULL);
+				close(fd);
+			}
+		}
 	}
 }
 
@@ -464,16 +516,7 @@ int initiate_server(
 ) {
 	ssize_t nread;
 	struct addrinfo *result = {0}, *rp = {0};
-	int s;
-
-	struct timeval tv = {
-		.tv_sec = 0,
-		.tv_usec = 50000
-	}; // 50ms
-	int tv_size = sizeof(tv);
-
-	int opt = 1;
-	int opt_size = sizeof(opt);
+	int s, opt = 1, opt_size = sizeof(opt), bs;
 
 	s = getaddrinfo(NULL, port, h, &result);
 	if (s != 0) {
@@ -495,12 +538,7 @@ int initiate_server(
 			exit(EXIT_FAILURE);
 		}
 
-		if (setsockopt(*sfd, SOL_SOCKET, SO_RCVTIMEO, &tv, tv_size) == -1) {
-			perror("setsockopt SO_RCVTIMEO");
-			exit(EXIT_FAILURE);
-		}
-
-		int bs = bind(*sfd, rp->ai_addr, rp->ai_addrlen);
+		bs = bind(*sfd, rp->ai_addr, rp->ai_addrlen);
 		if (bs == 0) break; // success, stop
 		
 		close(*sfd);
@@ -541,43 +579,43 @@ int tcp_server(
 int main(
 	int argc,
 	char **argv
-) {	
+) {
+	char *port;
+	int sfd, epc, result, client_fd, i, n, ectl;
+	struct epoll_event ev, events[MAX_EVENTS];
+	pthread_t workers[MAX_WORKERS];
+	WorkerData data = {0};
+
 	if (argc < 2) {
 		printf("Server startup failed, try:\n\n<Server Name> <PORT>\n");
 		exit(1);
 	}
 
-	char *port = argv[1];
-	int sfd = tcp_server(port);
-	if (sfd == -1) exit(1);
+	port = argv[1];
+	sfd = tcp_server(port);
+	if (sfd == -1) exit(EXIT_FAILURE);
 
 	if (listen(sfd, SOMAXCONN) == -1) {
 		printf("Failed to listen.\n");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	printf("Server listening on port %s\n", port);
 
-
-	int epc = epoll_create();
-
-
-
-
-	ListNodeManager queue = {0};
-	pthread_mutex_init(&queue.lock, NULL);
-    pthread_cond_init(&queue.ready, NULL);
-	pthread_t workers[3];
-	for (int i = 0; i < 3; i++) {
-		pthread_create(&workers[i], NULL, (void*) worker, &queue);
+	epc = epoll_create1(0);
+	ev.events = EPOLLIN | EPOLLEXCLUSIVE;
+	ev.data.fd = sfd;
+	if (epoll_ctl(epc, EPOLL_CTL_ADD, sfd, &ev) == -1) {
+		printf("sfd epoll_ctl\n");
+		exit(EXIT_FAILURE);
 	}
 
-	struct sockaddr_storage peer_addr = {0};
-	socklen_t peer_addrlen = sizeof(struct sockaddr_storage);
-	for (;;) {
-		int client_fd = accept(sfd, (struct sockaddr*) &peer_addr, (socklen_t*) &peer_addrlen);
-		if (client_fd == -1) continue;
-		enqueue(&queue, client_fd);
+	data.epc = epc;
+	data.sfd = sfd;
+	pthread_mutex_init(&data.lock, NULL);
+    pthread_cond_init(&data.ready, NULL);
+	for (i = 0; i < MAX_WORKERS; i++) {
+		pthread_create(&workers[i], NULL, (void*) worker, &data);
 	}
 
-	return 0;
+	pause();
 }

@@ -10,7 +10,7 @@
 typedef struct {
 	LIMArray *headers;
 	char *body;
-	long double content_length;
+	long content_length;
 	char method[REQ_METHOD_SIZE];
 	char path[REQ_PATH_SIZE];
 	char http_version[REQ_HTTP_VERSION_SIZE];

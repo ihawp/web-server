@@ -55,9 +55,9 @@ class Manager {
                     'Content-Type': 'text/html'
                 }
             });
-            if (!response.ok)  return 0;
-            const data = await response.json();
-            if (!data.success) return 0;
+            if (!response.ok) return 0;
+            if (response.status == 200) return 1;
+            if (response.status == 404 || response.status == 400) return 0;
             return 1;
         } catch (error) {
             return 0;
@@ -149,5 +149,5 @@ class Drawer {
     }
 }
 
-let amount = 5000;
-new Manager("error-response", amount, new Drawer(canvas, amount), start, stopp);
+let amount = 100000;
+new Manager("", amount, new Drawer(canvas, amount), start, stopp);
