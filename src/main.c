@@ -130,7 +130,7 @@ int send_stream_file(
 		"HTTP/1.1 %d %s\r\n"
 		"Content-Type: %s\r\n"
 		"Transfer-Encoding: chunked\r\n"
-		"Connection: keep-alive\r\n"
+		"Connection: close\r\n"
 		"\r\n",
 		http_response->status,
 		http_status_str(http_response->status),
@@ -164,7 +164,7 @@ int send_stream_file(
 	
 	fclose(f);
 	send(*client_fd, "0\r\n\r\n", 5, 0);
-	shutdown(*client_fd, SHUT_WR);
+	// shutdown(*client_fd, SHUT_WR);
 	return 0;
 }
 

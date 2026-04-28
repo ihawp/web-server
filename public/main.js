@@ -31,7 +31,7 @@ class Manager {
     stopRunning = () => this.running = 0;
 
     stop = () => {
-        this.stopRunning();
+        this.running = 0;
         this.endTime = Date.now();
         this.totalTime += this.endTime - this.startTime;
         let theString = `Total Time (${this.i + this.total}): ${this.totalTime}`;
@@ -85,6 +85,8 @@ class Drawer {
         this.canvas.width = this.ww;
         this.canvas.height = this.wh;
 
+        this.resetCanvas();
+
         this.columns = amount / 10;
         this.rows = amount / this.columns;
 
@@ -118,6 +120,26 @@ class Drawer {
 
     clearCanvas = () => {
         this.context.clearRect(0, 0, this.canvas.width, this.canvas.height)
+        this.resetCanvas();
+    }
+
+    resetCanvas = () => {
+        let fontSize = 100;
+        this.context.font = `${fontSize}px sans-serif`;
+        this.context.fillStyle = 'hotpink';
+        
+        let halfWidth = this.ww / 2;
+        let halfHeight = this.wh / 2;
+
+        let ss = "Server Speed";
+        let v = "Visualizer";
+
+        const getWidthSpot = (s) => halfWidth - ((s.length / 2) * (fontSize / 2));
+        
+        const getHeightSpot = (p) => (halfHeight - (fontSize / 2)) + (fontSize * p);
+
+        this.context.fillText(ss, getWidthSpot(ss), getHeightSpot(0));
+        this.context.fillText(v, getWidthSpot(v), getHeightSpot(1));
     }
 
     reset = () => {
@@ -127,5 +149,5 @@ class Drawer {
     }
 }
 
-let amount = 500;
+let amount = 5000;
 new Manager("error-response", amount, new Drawer(canvas, amount), start, stopp);
