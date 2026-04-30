@@ -18,7 +18,7 @@ int tcp_server(
 ) {
 	int sfd;
 	struct addrinfo h = {0};
-	struct addrinfo *result = {0}, *rp = {0};
+	struct addrinfo *result = NULL, *rp = NULL;
 	int s, opt = 1, opt_size = sizeof(opt), bs;
 
 	memset(&h, 0, sizeof(h));
