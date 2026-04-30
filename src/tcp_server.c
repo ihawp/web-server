@@ -8,12 +8,16 @@
 #include <fcntl.h>
 #include "tcp_server.h"
 
+/*
+	binds a socket to a port (of your choice)
+
+	returns the socket file descriptor of the bound socket
+*/
 int tcp_server(
 	char *port
 ) {
 	int sfd;
 	struct addrinfo h = {0};
-	ssize_t nread;
 	struct addrinfo *result = {0}, *rp = {0};
 	int s, opt = 1, opt_size = sizeof(opt), bs;
 
@@ -62,6 +66,20 @@ int tcp_server(
 	return sfd;
 }
 
+/*
+	buffer + *total is the point at which I want to start adding to the buffer
+	(after the total amount of characters added before)
+
+	*buffer_size - *total is the total amount of bytes allowed to be recv'd on
+	this call
+
+	no flags
+
+	Returns:  0 = data received
+			  1 = would block (EAGAIN/EWOULDBLOCK), caller should retry
+			  2 = peer closed
+			 -1 = connection closed or error
+*/
 int recv_chunks(
 	int *client_fd,
 	char *buffer,
@@ -69,7 +87,8 @@ int recv_chunks(
 	size_t *buffer_size
 ) {
 	ssize_t recv_count = recv(*client_fd, buffer + *total, *buffer_size - *total, 0);
-    if (recv_count <= 0) {
+    if (recv_count == 0) return 2;
+	if (recv_count < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) return 1;
         return -1;
     }

@@ -159,7 +159,7 @@ int send_stream_file(
 		int byte_count = fread(buffer, CHAR_SIZE, CHUNK_SIZE - 2, f);
 	
 		if (byte_count) {
-			memcpy(buffer + byte_count, "\r\n", 2);	
+			memcpy(buffer + byte_count, "\r\n", 2);
 
 			char hex_header[16];
 			int hex_header_len = snprintf(
@@ -168,10 +168,8 @@ int send_stream_file(
 				"%x\r\n", 
 				byte_count
 			);
-			// send the chunk hex header	
+
 			send(*client_fd, hex_header, hex_header_len, 0);
-	
-			// +2 for \r\n chars
 			send(*client_fd, buffer, byte_count + 2, 0);
 		}
 
@@ -339,12 +337,13 @@ int recv_header_chunks(
 ) {
 	ssize_t nn_count = 0;
 	size_t max_header_size = CLIENT_BUF_SIZE;
+	int status;
 
 	for (;;) {   
 
-		int r = recv_chunks(client_fd, buffer, &nn_count, &max_header_size);
-		if (r == -1) return -1;
-		if (r == 1) continue;
+		status = recv_chunks(client_fd, buffer, &nn_count, &max_header_size);
+		if (status == -1 || status == 2) return -1;
+		if (status == 1) continue;
 		char *mmp = memmem(buffer, nn_count, "\r\n\r\n", 4);
 		
 		// Found the header terminator
@@ -374,18 +373,16 @@ int recv_body_chunks(
 	for (;;) {
 		if (total >= buffer_size) break;
 
-		int chunk_result = recv_chunks(
+		int status = recv_chunks(
 			client_fd,
 			*buffer,
 			&total,
 			&buffer_size
 		);
 
-		printf("Chunk Result: %d\n", chunk_result);
-
-		if (chunk_result == 0) break;
-		if (chunk_result == 1) continue;
-		if (chunk_result == -1) {
+		if (status == 0) break;
+		if (status == 1) continue;
+		if (status == -1 || status == 2) {
 			if (total == 0) {
 				free(*buffer);
 				*buffer = NULL;
