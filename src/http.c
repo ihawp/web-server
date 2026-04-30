@@ -1,0 +1,571 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <errno.h>
+#include <pthread.h>
+#include <sys/epoll.h>
+#include <sys/syscall.h>
+#include <stdarg.h>
+
+#include "http.h"
+#include "line_in_memory_array.h"
+#include "program_speed.h"
+#include "helpers.h"
+#include "tcp_server.h"
+#include "process_data.h"
+
+void free_http_response(
+	HTTPResponse *htr
+) {
+	freelima(htr->headers);
+}
+
+int add_header(
+	HTTPResponse *htr,
+	char *header 
+) {
+	// update the size of the body
+	// TODO: #define at TOF
+	char *new_header = xmalloc(HEADER_SIZE);
+	if (new_header == NULL) return -1;
+	LineInMemory new_lim = lim(new_header, HEADER_SIZE);
+	arr_append((*htr->headers), new_lim);
+	return 0;
+}
+
+void free_http_request(
+	HTTPRequest *hrq
+) {
+	freelima(hrq->headers);
+	memset(hrq->method, 0, REQ_METHOD_SIZE);
+	memset(hrq->path, 0, REQ_PATH_SIZE);
+	memset(hrq->http_version, 0, REQ_HTTP_VERSION_SIZE);
+}
+
+char *file_to_content_type(
+	char *path
+) {
+	const char *ext = strrchr(path, '.');
+
+	if (!ext) return "application/octet-stream";
+	if (strcmp(ext, ".html") == 0) return "text/html";
+	if (strcmp(ext, ".css") == 0) return "text/css";
+	if (strcmp(ext, ".js") == 0) return "application/javascript";
+	if (strcmp(ext, ".json") == 0) return "application/json";
+	if (strcmp(ext, ".png") == 0) return "image/png";
+	if (strcmp(ext, ".jpg") == 0) return "image/jpeg";
+	if (strcmp(ext, ".webp") == 0) return "image/webp";
+	return "application/octet-stream";
+}
+
+const char *http_status_str(
+	int code
+) {
+	switch (code) {
+		case 200: return "OK";
+		case 201: return "Created";
+		case 204: return "No content";
+		case 301: return "Moved Permanently";
+		case 302: return "Found";
+		case 304: return "Not Modified";
+		case 400: return "Bad Request";
+		case 401: return "Unauthorized";
+		case 403: return "Forbidden";
+		case 404: return "Not Found";
+		case 405: return "Method Not Allowed";
+		case 408: return "Request Timeout";
+		case 409: return "Conflict";
+		case 413: return "Payload Too Large";
+		case 415: return "Unsupported Media Type";
+		case 422: return "Unprocessable Entity";
+		case 429: return "Too Many Requests";
+		case 500: return "Internal Server Error";
+		case 502: return "Bad Gateway";
+		case 503: return "Service Unavailable";
+		case 504: return "Gateway Timeout";
+		default: return "Unknown";
+	}
+}
+
+void send_json_response(
+	int *client_fd,
+	int status,
+	char *error_message	
+) {
+	char message[RESPONSE_BUF_SIZE];
+	int message_length = snprintf(
+		message,
+		sizeof(message),
+		"HTTP/1.1 %d %s\r\n"
+		"Content-Type: application/json\r\n"
+		"Connection: close\r\n"
+		"\r\n"
+		"%s",
+		status,
+		http_status_str(status),
+		error_message
+	);
+
+	send(*client_fd, message, message_length, 0);
+}
+
+// This should accept an already open and tested fd, rather than have the 404 loop if f == null and what not.
+int send_stream_file(
+	int *client_fd,
+	HTTPRequest *http_request,
+	HTTPResponse *http_response
+) {
+	if (strcmp(http_request->path, "/") == 0) {
+		strcpy(http_request->path, "index.html");
+	}
+
+	char buffer[CHUNK_SIZE];
+	char public_path[PATH_SIZE];
+	snprintf(public_path, PATH_SIZE, "public/%s", http_request->path);
+
+	char *content_type = file_to_content_type(http_request->path);
+	
+	char *fm = "r";
+	if (strncmp(content_type, "image", 5) == 0) { 
+		fm = "rb";
+	}
+
+	FILE *f = fopen(public_path, fm);
+	if (f == NULL) {
+		return -1;
+	}
+
+	http_response->status = 200;
+
+	char response[CHUNK_SIZE];
+	int response_len = snprintf(
+		response, 
+		sizeof(response), 
+		"HTTP/1.1 %d %s\r\n"
+		"Content-Type: %s\r\n"
+		"Transfer-Encoding: chunked\r\n"
+		"Connection: keep-alive\r\n"
+		"\r\n",
+		http_response->status,
+		http_status_str(http_response->status),
+		content_type
+	);
+	send(*client_fd, response, response_len, 0);
+
+	for (;;) {
+		// -2 incase max chars available (for \r\n characters at end of chunk EOC)
+		int byte_count = fread(buffer, CHAR_SIZE, CHUNK_SIZE - 2, f);
+	
+		if (byte_count) {
+			memcpy(buffer + byte_count, "\r\n", 2);	
+
+			char hex_header[16];
+			int hex_header_len = snprintf(
+				hex_header, 
+				sizeof(hex_header), 
+				"%x\r\n", 
+				byte_count
+			);
+			// send the chunk hex header	
+			send(*client_fd, hex_header, hex_header_len, 0);
+	
+			// +2 for \r\n chars
+			send(*client_fd, buffer, byte_count + 2, 0);
+		}
+
+		if (feof(f) != 0) break;
+	}
+	
+	fclose(f);
+	send(*client_fd, "0\r\n\r\n", 5, 0);
+	shutdown(*client_fd, SHUT_WR);
+	return 0;
+}
+
+int parse_headers(
+	HTTPRequest *http_request,
+	HTTPResponse *http_response
+) {
+	//	0x20: ` `
+	//	0x3A: `:`
+	http_response->headers = xmalloc(sizeof(LIMArray));
+	LIMArray lim_array = {0};
+	*http_response->headers = lim_array; 
+
+	for (int i = 0; i < http_request->headers->count; i++) {
+		if (i == 0) continue;
+
+		StringView value = {
+			.string = http_request->headers->pointer[i].pointer,
+			.count = http_request->headers->pointer[i].count
+		};
+	 	
+		StringView key = split_by_delim(&value, 0x3A);
+		trim_by_delim(&key, 0x20);
+		trim_by_delim(&value, 0x20);
+
+		#define HDR(name) strncmp(key.string, name, key.count) == 0
+
+		if (key.count == 0) continue;
+		if (HDR("A-IM")) {}
+		if (HDR("Accept")) {}
+		if (HDR("Accept-Charset")) {}
+		if (HDR("Accept-Datetime")) {}
+		if (HDR("Accept-Encoding")) {}
+		if (HDR("Accept-Language")) {}
+		if (HDR("Access-Control-Request-Method")) {}
+		if (HDR("Access-Control-Request-Headers")) {}
+		if (HDR("Authorization")) {}	
+		if (HDR("Cache-Control")) {}
+		if (HDR("Connection")) {}
+		if (HDR("Content-Encoding")) {}
+		if (HDR("Content-Length")) {
+			char *endptr;
+			long content_length = strtol(value.string, &endptr, 10); // convert to base 10
+			http_request->content_length = content_length;
+			continue;
+		}
+		if (HDR("Content-MD5")) {}
+		if (HDR("Content-Type")) {}
+		if (HDR("Cookie")) {}
+		if (HDR("Date")) {}
+		if (HDR("Expect")) {}
+		if (HDR("Forwarded")) {}
+		if (HDR("From")) {}
+		if (HDR("Host")) {}
+		if (HDR("HTTP2-Settings")) {}
+		if (HDR("If-Match")) {}
+		if (HDR("If-Modified-Since")) {}
+		if (HDR("If-None-Match")) {}
+		if (HDR("If-Range")) {}
+		if (HDR("If-Unmodified-Since")) {}
+		if (HDR("Max-Forwards")) {}
+		if (HDR("Origin")) {}
+		if (HDR("Pragma")) {}
+		if (HDR("Prefer")) {}
+		if (HDR("Proxy-Authorization")) {}
+		if (HDR("Range")) {}
+		if (HDR("Referer")) {}
+		if (HDR("TE")) {}
+		if (HDR("Trailer")) {}
+		if (HDR("Transfer-Encoding")) {}
+		if (HDR("User-Agent")) {}
+		if (HDR("Upgrade")) {}
+		if (HDR("Via")) {}
+		if (HDR("Warning")) {}
+
+		// non-standard
+		if (HDR("Upgrade-Insecure-Requests")) {}
+		if (HDR("X-Requested-With")) {}
+		if (HDR("DNT")) {}
+		if (HDR("X-Forwarded-For")) {}
+		if (HDR("X-Forwarded-Host")) {}
+		if (HDR("X-Forwarded-Proto")) {}
+		if (HDR("Front-End-Https")) {}
+		if (HDR("X-Http-Method-Override")) {}
+		if (HDR("X-ATT-DeviceId")) {}
+		if (HDR("X-Wap-Profile")) {}
+		if (HDR("Proxy-Connection")) {}
+		if (HDR("X-UIDH")) {}
+		if (HDR("X-Csrf-Token")) {}
+		if (HDR("X-Request-Id")) {}
+		if (HDR("X-Correlation-Id")) {}
+		if (HDR("Correlation-Id")) {}
+		if (HDR("Save-Data")) {}
+		if (HDR("Sec-GPC")) {}
+
+		#undef HDR
+	}
+
+	return 0;
+}
+
+int extract_path_method_version(
+	HTTPRequest *req
+) {
+	char *header = xmalloc(req->headers->pointer[0].count + 1);
+	if (header == NULL) return -1;
+
+	int size = snprintf(
+		header,
+		req->headers->pointer[0].count + 1,
+		SV_fmt, 
+		(int) req->headers->pointer[0].count,
+		req->headers->pointer[0].pointer
+	);
+	
+	StringView svh = sv(header);
+	StringView fsvh = split_by_delim(&svh, 0x20);
+	StringView path = split_by_delim(&svh, 0x20);
+
+	SV_to_memory(req->method, REQ_METHOD_SIZE, &fsvh);
+	SV_to_memory(req->path, REQ_PATH_SIZE, &path);
+	SV_to_memory(req->http_version, REQ_HTTP_VERSION_SIZE, &svh);
+
+	free(header);
+	return 0;
+}
+
+LIMArray find_header_bounds(
+	char *req
+) {
+	StringView s = sv(req);
+	
+	LIMArray lim_array = {0};
+	int last_line = 0;
+	
+	for (int i = 0; i < s.count; i++) {
+		if (i + 1 >= s.count) break;
+	
+		// Checks for \r\n (carriage return, newline)
+		if (s.string[i] == 0x0D && s.string[i + 1] == 0x0A) {
+			char *line_start = (last_line == 0) ? s.string : &s.string[last_line + 2];
+			int count = (int)(s.string + i - line_start);
+			LineInMemory l = lim(line_start, count);
+	
+			arr_append(lim_array, l);
+			last_line = i;
+		}
+	}
+
+	return lim_array;
+}
+
+int recv_header_chunks(
+	int *client_fd,
+	char *buffer
+) {
+	ssize_t nn_count = 0;
+	size_t max_header_size = CLIENT_BUF_SIZE;
+
+	for (;;) {   
+
+		int r = recv_chunks(client_fd, buffer, &nn_count, &max_header_size);
+		if (r == -1) return -1;
+		if (r == 1) continue;
+		char *mmp = memmem(buffer, nn_count, "\r\n\r\n", 4);
+		
+		// Found the header terminator
+		if (mmp != NULL) break;
+	}
+
+	// Add null terminator to end of string
+	buffer[nn_count] = '\0';
+	return 0;
+}
+
+// TODO: post requests get stuck
+int recv_body_chunks(
+	int *client_fd,
+	char **buffer,
+	size_t buffer_size
+) {
+	if (buffer_size <= 0 || buffer_size >= MAX_CONTENT_LENGTH) {
+		return -1;
+	}
+
+	*buffer = xmalloc(buffer_size + 1);
+	if (*buffer == NULL) return -1;
+
+	size_t total = 0;
+
+	for (;;) {
+		if (total >= buffer_size) break;
+
+		int chunk_result = recv_chunks(
+			client_fd,
+			*buffer,
+			&total,
+			&buffer_size
+		);
+
+		printf("Chunk Result: %d\n", chunk_result);
+
+		if (chunk_result == 0) break;
+		if (chunk_result == 1) continue;
+		if (chunk_result == -1) {
+			if (total == 0) {
+				free(*buffer);
+				*buffer = NULL;
+				return -1;
+			}
+			break;
+		}
+	}
+
+	(*buffer)[total] = '\0';
+	return 0;
+}
+
+int capture_headers(
+	int *client_fd,
+	HTTPRequest *req
+) {
+	// Receive chunks until the body \r\n\r\n
+	char *headers = xmalloc(CLIENT_BUF_SIZE);
+	if (recv_header_chunks(client_fd, headers) == -1) {
+		return -1;
+	}
+
+	LIMArray lim_array = find_header_bounds(headers);
+	if (lim_array.count == 0) {
+		printf("Failed to find any header info.\n");
+		return -1;
+	}
+
+	req->headers = xmalloc(sizeof(LIMArray));
+	if (req->headers == NULL) return -1;
+
+	*req->headers = lim_array;
+	return extract_path_method_version(req);
+}
+
+int handle_request(
+	int *client_fd,
+	HTTPRequest *http_request,
+	HTTPResponse *http_response
+) {
+	int sf;
+
+	// create array of pointers/count for each header from buffer
+	if (capture_headers(client_fd, http_request) == -1) return -1;
+
+	// review the received headers
+	if (parse_headers(http_request, http_response) == -1) return -1;
+
+	if (strcmp(http_request->method, "POST") == 0) {
+		if (recv_body_chunks(client_fd, &http_request->body, (size_t) http_request->content_length) == -1) {
+			return -1;
+		}
+		
+		printf("BODY: %s\n", http_request->body);
+		send_json_response(client_fd, 200, "{\"success\": true, \"message\": \"We recieved your data!\"}");
+		
+		return 0;
+	}
+
+	if (strcmp(http_request->method, "GET") == 0) {
+		if (send_stream_file(client_fd, http_request, http_response) == -1) {
+			return -1;
+		}
+		
+		return 0;
+	}
+
+	return -1;
+}
+
+void *http_worker(
+	void *data
+) {
+	struct process_data *wd = data;
+	HTTPRequest http_request = {0};
+	HTTPResponse http_response = {0};
+	struct sockaddr_storage peer_addr = {0};
+	struct epoll_event ev, events[MAX_EVENTS] = {0};
+	socklen_t peer_addrlen = sizeof(struct sockaddr_storage);
+	int client_fd, n, ectl, result, fd;
+	pid_t tid;
+	struct program_speed speed = {0};
+
+	ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+	tid = syscall(SYS_gettid);
+	int *tid_p = &tid;
+
+	printfid("Worker Started", tid);
+
+	for (;;) {
+		result = epoll_wait(wd->epc, events, MAX_EVENTS, -1);
+		if (result == -1) continue;
+
+		for (n = 0; n < result; ++n) {
+			if (events[n].data.fd == wd->sfd) {
+				
+				client_fd = accept(wd->sfd, (struct sockaddr*) &peer_addr, (socklen_t*) &peer_addrlen);
+				if (client_fd == -1) {
+					printfid("client_fd", tid);
+					continue;
+				}
+
+				if (setnonblocking(client_fd) == -1) {
+					printfid("blocking", tid);
+				}
+
+				ev.data.fd = client_fd;
+				ectl = epoll_ctl(wd->epc, EPOLL_CTL_ADD, client_fd, &ev);
+				
+				if (errno == EEXIST) {
+					printfid("EEXIST", tid);
+				}
+
+				if (ectl == -1) {
+					printfid("setnonblocking epoll_ctl", tid);
+					exit(EXIT_FAILURE);
+				}
+			} else {
+				fd = events[n].data.fd;
+
+				memset(&http_request, 0, sizeof(http_request));
+				memset(&http_response, 0, sizeof(http_response));
+
+				ps_cap(&speed.start);
+				ps_print_pit(&speed.start, tid_p);
+				
+				if (handle_request(&fd, &http_request, &http_response) == -1) {
+					send_json_response(&client_fd, 400, "{\"error\": \"Failed to handle request\", \"success\": false}");
+					printfid("handle_request", tid);
+				}
+
+				ps_cap(&speed.end);
+				ps_print_pit(&speed.end, tid_p);
+				ps_print_elapsed(&speed, tid_p);
+
+				free_http_request(&http_request);
+				free_http_response(&http_response);
+				epoll_ctl(wd->epc, EPOLL_CTL_DEL, fd, NULL);
+				close(fd);
+			}
+		}
+	}
+
+	printfid("Worker Exiting", tid);
+}
+
+void http_server(
+	int sfd,
+	char *port
+) {
+	int epc, result, client_fd, i, n, ectl;
+	struct epoll_event ev, events[MAX_EVENTS] = {0};
+	pthread_t workers[MAX_WORKERS];
+	struct process_data data = {0};
+
+	data.pid = getpid();
+
+	if (listen(sfd, SOMAXCONN) == -1) {
+		printfid("Failed to listen", data.pid);
+		exit(EXIT_FAILURE);
+	}
+	
+	printf("\e[1;1H\e[2J");
+	printfid("Server listening on port %s", data.pid, port);
+
+	epc = epoll_create1(0);
+	ev.events = EPOLLIN | EPOLLEXCLUSIVE;
+	ev.data.fd = sfd;
+	if (epoll_ctl(epc, EPOLL_CTL_ADD, sfd, &ev) == -1) {
+		printfid("sfd epoll_ctl", data.pid);
+		exit(EXIT_FAILURE);
+	}
+
+	data.epc = epc;
+	data.sfd = sfd;
+	pthread_mutex_init(&data.lock, NULL);
+    pthread_cond_init(&data.ready, NULL);
+
+	for (i = 0; i < MAX_WORKERS; i++) {
+		pthread_create(&workers[i], NULL, (void*) http_worker, &data);
+	}
+}

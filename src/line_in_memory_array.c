@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "line_in_memory_array.h"
-#include "array_append.h"
+#include "helpers.h"
 
 LineInMemory lim(
 	char *pointer,
@@ -23,31 +23,6 @@ LIMArray lima(
 		.count = count,
 		.capacity = capacity
 	};
-}
-
-LIMArray find_header_bounds(
-	char *req
-) {
-	StringView s = sv(req);
-	
-	LIMArray lim_array = {0};
-	int last_line = 0;
-	
-	for (int i = 0; i < s.count; i++) {
-		if (i + 1 >= s.count) break;
-	
-		// Checks for \r\n (carriage return, newline)
-		if (s.string[i] == 0x0D && s.string[i + 1] == 0x0A) {
-			char *line_start = (last_line == 0) ? s.string : &s.string[last_line + 2];
-			int count = (int)(s.string + i - line_start);
-			LineInMemory l = lim(line_start, count);
-	
-			arr_append(lim_array, l);
-			last_line = i;
-		}
-	}
-
-	return lim_array;
 }
 
 void freelima(

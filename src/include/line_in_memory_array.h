@@ -27,7 +27,3 @@ LIMArray lima(
 void freelima(
 	LIMArray *arr
 );
-
-LIMArray find_header_bounds(
-	char *req
-);

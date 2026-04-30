@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 
 #define arr_append(arr, item) { \
 	if ((arr).count + 1 >= (arr).capacity) { \
@@ -18,4 +19,14 @@
 	} \
 	(arr).count += 1; \
 	(arr).pointer[(arr).count - 1] = item; \
-}
+} \
+
+void *xmalloc(
+	size_t size
+);
+
+void printfid(
+	const char *format, 
+	int id, 
+	...
+);

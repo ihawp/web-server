@@ -4,8 +4,9 @@
 #include <stdlib.h>
 #include <pthread.h>
 
-typedef struct {
+struct process_data {
     int epc, sfd;
+    pid_t pid;
     pthread_mutex_t lock;
     pthread_cond_t ready;
-} WorkerData;
+};

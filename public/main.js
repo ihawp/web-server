@@ -149,5 +149,5 @@ class Drawer {
     }
 }
 
-let amount = 100000;
+let amount = 100;
 new Manager("", amount, new Drawer(canvas, amount), start, stopp);
