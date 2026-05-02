@@ -299,12 +299,8 @@ int recv_body_chunks(
 	size_t content_length,
 	size_t *body_length
 ) {
-	// DO NOT ASSIGN THE BUFFER INSIDE THIS FUNCTION
 	for (;;) {
-		if (*body_length >= content_length) {
-			printf("breaking on >=\n");
-			break;
-		}
+		if (*body_length >= content_length) break;
 
 		int status = recv_chunks(
 			client_fd,
@@ -313,7 +309,7 @@ int recv_body_chunks(
 			&content_length
 		);
 
-		if (status == 1) continue; // keeps looping on 1 because EAGAIN or EWOULDBLOCK is set
+		if (status == 1) continue;
 		if (status == -1 || status == 2) {
 			if (*body_length == 0) {
 				free(buffer);
@@ -403,8 +399,6 @@ int handle_request(
 			return -1;
 		}
 
-		printf("BODY LENGTH OUTSIDE: %ld\nRECV_COUNT OUTSIDE: %ld\n", body_length, recv_count);
-		printf("BODY: %s\nBODY STR LEN: %ld\n", http_request->body, strlen(http_request->body));
 		send_json_response(client_fd, 200, "{\"success\": true, \"message\": \"We recieved your data!\"}");
 		
 		return 0;
