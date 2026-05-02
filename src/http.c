@@ -302,7 +302,10 @@ int recv_body_chunks(
 ) {
 	// DO NOT ASSIGN THE BUFFER INSIDE THIS FUNCTION
 	for (;;) {
-		if (*body_length >= content_length) break;
+		if (*body_length >= content_length) {
+			printf("breaking on >=\n");
+			break;
+		}
 
 		int status = recv_chunks(
 			client_fd,
@@ -311,7 +314,6 @@ int recv_body_chunks(
 			&content_length
 		);
 
-		if (status == 0) break;
 		if (status == 1) continue; // keeps looping on 1 because EAGAIN or EWOULDBLOCK is set
 		if (status == -1 || status == 2) {
 			if (*body_length == 0) {
@@ -323,7 +325,7 @@ int recv_body_chunks(
 		}
 	}
 
-	buffer[*total] = '\0';
+	buffer[*body_length] = '\0';
 	return 0;
 }
 
@@ -373,12 +375,12 @@ int handle_request(
 
 	if (parse_headers(http_request, http_response) == -1) {
 		printf("Failed to parse headers\n");
-		return -1
+		return -1;
 	};
 
 	if (strcmp(http_request->method, "POST") == 0) {
 		if (http_request->content_length >= MAX_CONTENT_LENGTH - CLIENT_BUF_SIZE) {
-			return -1;
+			return -1; // can start making custom error codes #define OVER_LIMIT 10
 		}
 
 		if (body_length == http_request->content_length) {
@@ -402,8 +404,9 @@ int handle_request(
 			printf("Failed to recieve body chunks\n");
 			return -1;
 		}
-		
-		printf("BODY: %s\n", http_request->body);
+
+		printf("BODY LENGTH OUTSIDE: %ld\nRECV_COUNT OUTSIDE: %ld\n", body_length, recv_count);
+		printf("BODY: %s\nBODY STR LEN: %ld\n", http_request->body, strlen(http_request->body));
 		send_json_response(client_fd, 200, "{\"success\": true, \"message\": \"We recieved your data!\"}");
 		
 		return 0;
