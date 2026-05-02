@@ -93,7 +93,6 @@ int recv_body_chunks(
 	int *client_fd,
 	char *buffer,
 	size_t content_length,
-	ssize_t *total,
 	size_t *body_length
 );
 

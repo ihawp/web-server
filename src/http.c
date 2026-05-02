@@ -297,7 +297,6 @@ int recv_body_chunks(
 	int *client_fd,
 	char *buffer,
 	size_t content_length,
-	ssize_t *total,
 	size_t *body_length
 ) {
 	// DO NOT ASSIGN THE BUFFER INSIDE THIS FUNCTION
@@ -398,7 +397,6 @@ int handle_request(
 			client_fd, 
 			http_request->body, 
 			(size_t) http_request->content_length, 
-			&recv_count,
 			&body_length
 		) == -1) {
 			printf("Failed to recieve body chunks\n");
