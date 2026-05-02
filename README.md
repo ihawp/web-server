@@ -1,8 +1,5 @@
 # HTTP/1.1 Server in C
 
-## TODO:
-- Post requests broken by design.
-
 ## What exists?
 
 - TCP socket listening on port passed as `argv[1]`
