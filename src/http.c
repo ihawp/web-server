@@ -155,7 +155,7 @@ int send_stream_file(
 	send(*client_fd, response, response_len, 0);
 
 	for (;;) {
-		// -2 incase max chars available (for \r\n characters at end of chunk EOC)
+		// -2 for trailing \r\n
 		int byte_count = fread(buffer, CHAR_SIZE, CHUNK_SIZE - 2, f);
 	
 		if (byte_count) {
@@ -201,80 +201,19 @@ int parse_headers(
 		};
 	 	
 		StringView key = split_by_delim(&value, 0x3A);
+
+		if (key.count == 0) continue;
+
 		trim_by_delim(&key, 0x20);
 		trim_by_delim(&value, 0x20);
 
-		#define HDR(name) strncmp(key.string, name, key.count) == 0
-
-		if (key.count == 0) continue;
-		if (HDR("A-IM")) {}
-		if (HDR("Accept")) {}
-		if (HDR("Accept-Charset")) {}
-		if (HDR("Accept-Datetime")) {}
-		if (HDR("Accept-Encoding")) {}
-		if (HDR("Accept-Language")) {}
-		if (HDR("Access-Control-Request-Method")) {}
-		if (HDR("Access-Control-Request-Headers")) {}
-		if (HDR("Authorization")) {}	
-		if (HDR("Cache-Control")) {}
-		if (HDR("Connection")) {}
-		if (HDR("Content-Encoding")) {}
-		if (HDR("Content-Length")) {
+		// capture value from content-length header
+		if (strncmp(key.string, "Content-Length", key.count) == 0) {
 			char *endptr;
 			long content_length = strtol(value.string, &endptr, 10); // convert to base 10
 			http_request->content_length = content_length;
 			continue;
 		}
-		if (HDR("Content-MD5")) {}
-		if (HDR("Content-Type")) {}
-		if (HDR("Cookie")) {}
-		if (HDR("Date")) {}
-		if (HDR("Expect")) {}
-		if (HDR("Forwarded")) {}
-		if (HDR("From")) {}
-		if (HDR("Host")) {}
-		if (HDR("HTTP2-Settings")) {}
-		if (HDR("If-Match")) {}
-		if (HDR("If-Modified-Since")) {}
-		if (HDR("If-None-Match")) {}
-		if (HDR("If-Range")) {}
-		if (HDR("If-Unmodified-Since")) {}
-		if (HDR("Max-Forwards")) {}
-		if (HDR("Origin")) {}
-		if (HDR("Pragma")) {}
-		if (HDR("Prefer")) {}
-		if (HDR("Proxy-Authorization")) {}
-		if (HDR("Range")) {}
-		if (HDR("Referer")) {}
-		if (HDR("TE")) {}
-		if (HDR("Trailer")) {}
-		if (HDR("Transfer-Encoding")) {}
-		if (HDR("User-Agent")) {}
-		if (HDR("Upgrade")) {}
-		if (HDR("Via")) {}
-		if (HDR("Warning")) {}
-
-		// non-standard
-		if (HDR("Upgrade-Insecure-Requests")) {}
-		if (HDR("X-Requested-With")) {}
-		if (HDR("DNT")) {}
-		if (HDR("X-Forwarded-For")) {}
-		if (HDR("X-Forwarded-Host")) {}
-		if (HDR("X-Forwarded-Proto")) {}
-		if (HDR("Front-End-Https")) {}
-		if (HDR("X-Http-Method-Override")) {}
-		if (HDR("X-ATT-DeviceId")) {}
-		if (HDR("X-Wap-Profile")) {}
-		if (HDR("Proxy-Connection")) {}
-		if (HDR("X-UIDH")) {}
-		if (HDR("X-Csrf-Token")) {}
-		if (HDR("X-Request-Id")) {}
-		if (HDR("X-Correlation-Id")) {}
-		if (HDR("Correlation-Id")) {}
-		if (HDR("Save-Data")) {}
-		if (HDR("Sec-GPC")) {}
-
-		#undef HDR
 	}
 
 	return 0;
@@ -331,92 +270,61 @@ LIMArray find_header_bounds(
 	return lim_array;
 }
 
-int recv_header_chunks(
+char *recv_header_chunks(
 	int *client_fd,
-	char *buffer
+	char *buffer,
+	ssize_t *recv_count
 ) {
-	ssize_t nn_count = 0;
-	size_t max_header_size = CLIENT_BUF_SIZE;
+	size_t max_header_size = CLIENT_BUF_SIZE - 1;
 	int status;
+	char *mmp;
 
 	for (;;) {   
-
-		status = recv_chunks(client_fd, buffer, &nn_count, &max_header_size);
-		if (status == -1 || status == 2) return -1;
+		status = recv_chunks(client_fd, buffer, recv_count, &max_header_size);
+		if (status == -1 || status == 2) return NULL;
 		if (status == 1) continue;
-		char *mmp = memmem(buffer, nn_count, "\r\n\r\n", 4);
-		
-		// Found the header terminator
-		if (mmp != NULL) break;
+		mmp = memmem(buffer, *recv_count, "\r\n\r\n", 4); // memmem only finds \r\n\r\n in bytes so I need to pinpoint it
+		if (mmp != NULL) {
+			buffer[*recv_count] = '\0';
+			return mmp;
+		}
 	}
 
-	// Add null terminator to end of string
-	buffer[nn_count] = '\0';
-	return 0;
+	return NULL;
 }
 
-// TODO: post requests get stuck
 int recv_body_chunks(
 	int *client_fd,
-	char **buffer,
-	size_t buffer_size
+	char *buffer,
+	size_t content_length,
+	ssize_t *total,
+	size_t *body_length
 ) {
-	if (buffer_size <= 0 || buffer_size >= MAX_CONTENT_LENGTH) {
-		return -1;
-	}
-
-	*buffer = xmalloc(buffer_size + 1);
-	if (*buffer == NULL) return -1;
-
-	size_t total = 0;
-
+	// DO NOT ASSIGN THE BUFFER INSIDE THIS FUNCTION
 	for (;;) {
-		if (total >= buffer_size) break;
+		if (*body_length >= content_length) break;
 
 		int status = recv_chunks(
 			client_fd,
-			*buffer,
-			&total,
-			&buffer_size
+			buffer,
+			body_length,
+			&content_length
 		);
 
 		if (status == 0) break;
-		if (status == 1) continue;
+		if (status == 1) continue; // keeps looping on 1 because EAGAIN or EWOULDBLOCK is set
 		if (status == -1 || status == 2) {
-			if (total == 0) {
-				free(*buffer);
-				*buffer = NULL;
+			if (*body_length == 0) {
+				free(buffer);
+				buffer = NULL;
 				return -1;
 			}
 			break;
 		}
 	}
 
-	(*buffer)[total] = '\0';
+	buffer[*total] = '\0';
 	return 0;
-}
-
-int capture_headers(
-	int *client_fd,
-	HTTPRequest *req
-) {
-	// Receive chunks until the body \r\n\r\n
-	char *headers = xmalloc(CLIENT_BUF_SIZE);
-	if (recv_header_chunks(client_fd, headers) == -1) {
-		return -1;
-	}
-
-	LIMArray lim_array = find_header_bounds(headers);
-	if (lim_array.count == 0) {
-		printf("Failed to find any header info.\n");
-		return -1;
-	}
-
-	req->headers = xmalloc(sizeof(LIMArray));
-	if (req->headers == NULL) return -1;
-
-	*req->headers = lim_array;
-	return extract_path_method_version(req);
 }
 
 int handle_request(
@@ -424,16 +332,74 @@ int handle_request(
 	HTTPRequest *http_request,
 	HTTPResponse *http_response
 ) {
-	int sf;
+	char *headers = xmalloc(CLIENT_BUF_SIZE), *body_start;
+	ssize_t recv_count = 0;
+	size_t bs_size, body_length;
 
-	// create array of pointers/count for each header from buffer
-	if (capture_headers(client_fd, http_request) == -1) return -1;
+	// instead we create the buffer for the httprequest->body here
+	if (headers == NULL) {
+		printf("Failed to allocate memory for body\n");
+		return -1;
+	}
 
-	// review the received headers
-	if (parse_headers(http_request, http_response) == -1) return -1;
+	body_start = recv_header_chunks(client_fd, headers, &recv_count);
+	if (body_start == NULL) {
+		printf("mmp failed\n");
+		return -1;
+	}
+
+	// ths bs_size tells us how many characters the actual headers are
+	// the recv_count - bs_size = the length of body
+	// already added, which will be used as the 3rd parameter of memmove
+	bs_size = body_start - headers;
+	body_length = recv_count - bs_size - 4; // remove 4 for \r\n\r\n
+	*body_start = '\0'; // add a null terminator for end of headers
+	body_start += 4; // move past \r\n\r\n to start of body content
+
+	LIMArray lim_array = find_header_bounds(headers);
+	if (lim_array.count == 0) {
+		printf("Failed to find any header info.\n");
+		return -1;
+	}
+
+	http_request->headers = xmalloc(sizeof(LIMArray));
+	if (http_request->headers == NULL) return -1;
+	*http_request->headers = lim_array;
+	
+	if (extract_path_method_version(http_request) == -1) {
+		printf("Failed to extract_path_method_version\n");
+		return -1;
+	}
+
+	if (parse_headers(http_request, http_response) == -1) {
+		printf("Failed to parse headers\n");
+		return -1
+	};
 
 	if (strcmp(http_request->method, "POST") == 0) {
-		if (recv_body_chunks(client_fd, &http_request->body, (size_t) http_request->content_length) == -1) {
+		if (http_request->content_length >= MAX_CONTENT_LENGTH - CLIENT_BUF_SIZE) {
+			return -1;
+		}
+
+		if (body_length == http_request->content_length) {
+			printf("whole body found in first recv\n");
+		}
+
+		http_request->body = xmalloc(http_request->content_length + 1);
+		if (http_request->body == NULL) return -1;
+
+		// move the originally (potentially) captured body content
+		// into the proper body container: http_request->body
+		memcpy(http_request->body, body_start, http_request->content_length); // bs_size is greater than content length
+
+		if (recv_body_chunks(
+			client_fd, 
+			http_request->body, 
+			(size_t) http_request->content_length, 
+			&recv_count,
+			&body_length
+		) == -1) {
+			printf("Failed to recieve body chunks\n");
 			return -1;
 		}
 		
@@ -508,15 +474,15 @@ void *http_worker(
 				memset(&http_response, 0, sizeof(http_response));
 
 				ps_cap(&speed.start);
-				ps_print_pit(&speed.start, tid_p);
+				// ps_print_pit(&speed.start, tid_p);
 				
 				if (handle_request(&fd, &http_request, &http_response) == -1) {
-					send_json_response(&client_fd, 400, "{\"error\": \"Failed to handle request\", \"success\": false}");
+					send_json_response(&fd, 200, "{\"error\": \"Failed to handle request\", \"success\": false}");
 					printfid("handle_request", tid);
 				}
 
 				ps_cap(&speed.end);
-				ps_print_pit(&speed.end, tid_p);
+				// ps_print_pit(&speed.end, tid_p);
 				ps_print_elapsed(&speed, tid_p);
 
 				free_http_request(&http_request);

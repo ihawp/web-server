@@ -19,7 +19,8 @@ int tcp_server(
 	int sfd;
 	struct addrinfo h = {0};
 	struct addrinfo *result = NULL, *rp = NULL;
-	int s, opt = 1, opt_size = sizeof(opt), bs;
+	int s, opt = 1, bs;
+	socklen_t opt_size = sizeof(opt);
 
 	memset(&h, 0, sizeof(h));
 	h.ai_flags = AI_PASSIVE; // int
@@ -87,7 +88,7 @@ int recv_chunks(
 	size_t *buffer_size
 ) {
 	ssize_t recv_count = recv(*client_fd, buffer + *total, *buffer_size - *total, 0);
-    if (recv_count == 0) return 2;
+	if (recv_count == 0) return 2;
 	if (recv_count < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) return 1;
         return -1;

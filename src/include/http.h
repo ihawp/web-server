@@ -1,17 +1,19 @@
 #pragma once
 
+#include <unistd.h>
 #include <string.h>
 #include "line_in_memory_array.h"
 #include "string_view.h"
 
+// TODO: rename and organize and refactor and rethink!
 #define MAX_EVENTS 10
 #define MAX_WORKERS 3
 #define HEADER_SIZE 256
 #define REQ_METHOD_SIZE 16
 #define REQ_PATH_SIZE 256
 #define REQ_HTTP_VERSION_SIZE 24
-#define MAX_CONTENT_LENGTH 4096
-#define CLIENT_BUF_SIZE 2048
+#define MAX_CONTENT_LENGTH 8000
+#define CLIENT_BUF_SIZE 1024
 #define CHUNK_SIZE 512
 #define RESPONSE_BUF_SIZE 512
 #define PATH_SIZE 512
@@ -80,16 +82,19 @@ int capture_headers(
 	HTTPRequest *req
 );
 
-int recv_header_chunks(
+char *recv_header_chunks(
 	int *client_fd,
-	char *buffer
+	char *buffer,
+	ssize_t *recv_count
 );
 
 // TODO: post requests get stuck
 int recv_body_chunks(
 	int *client_fd,
-	char **buffer,
-	size_t buffer_size
+	char *buffer,
+	size_t content_length,
+	ssize_t *total,
+	size_t *body_length
 );
 
 LIMArray find_header_bounds(
