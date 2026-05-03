@@ -188,6 +188,10 @@ int parse_headers(
 ) {
 	//	0x20: ` `
 	//	0x3A: `:`
+
+	// why did I do this?
+	// why am I reading the memory like this?
+	
 	http_response->headers = xmalloc(sizeof(LIMArray));
 	LIMArray lim_array = {0};
 	*http_response->headers = lim_array; 
@@ -326,22 +330,24 @@ int recv_body_chunks(
 
 int handle_request(
 	int *client_fd,
+	int *tid, 
 	HTTPRequest *http_request,
 	HTTPResponse *http_response
 ) {
+	// no +1 on CLIENT_BUF_SIZE because recv_header_chunks
+	// sets max recv amount to CLIENT_BUF_SIZE - 1
 	char *headers = xmalloc(CLIENT_BUF_SIZE), *body_start;
 	ssize_t recv_count = 0;
 	size_t bs_size, body_length;
 
-	// instead we create the buffer for the httprequest->body here
 	if (headers == NULL) {
-		printf("Failed to allocate memory for body\n");
+		printfid("Failed to allocate memory for body", *tid);
 		return -1;
 	}
 
 	body_start = recv_header_chunks(client_fd, headers, &recv_count);
 	if (body_start == NULL) {
-		printf("mmp failed\n");
+		printfid("Failed to receive header chunks", *tid);
 		return -1;
 	}
 
@@ -351,11 +357,11 @@ int handle_request(
 	bs_size = body_start - headers;
 	body_length = recv_count - bs_size - 4; // remove 4 for \r\n\r\n
 	*body_start = '\0'; // add a null terminator for end of headers
-	body_start += 4; // move past \r\n\r\n to start of body content
+	body_start += 4; // move past \0\n\r\n to start of body content
 
 	LIMArray lim_array = find_header_bounds(headers);
 	if (lim_array.count == 0) {
-		printf("Failed to find any header info.\n");
+		printfid("Failed to find any header info.", *tid);
 		return -1;
 	}
 
@@ -364,22 +370,23 @@ int handle_request(
 	*http_request->headers = lim_array;
 	
 	if (extract_path_method_version(http_request) == -1) {
-		printf("Failed to extract_path_method_version\n");
+		printfid("Failed to extract_path_method_version", *tid);
 		return -1;
 	}
 
 	if (parse_headers(http_request, http_response) == -1) {
-		printf("Failed to parse headers\n");
+		printfid("Failed to parse headers", *tid);
 		return -1;
 	};
 
 	if (strcmp(http_request->method, "POST") == 0) {
 		if (http_request->content_length >= MAX_CONTENT_LENGTH - CLIENT_BUF_SIZE) {
-			return -1; // can start making custom error codes #define OVER_LIMIT 10
+			return -1; // can start making custom error codes #define OVER_LIMIT 10 for preset error responses (in json or etc)
 		}
 
+		printfid("BODY LENGTH: %ld\nCONTENT_LENGTH: %ld", tid, body_length, http_request->content_length);
 		if (body_length == http_request->content_length) {
-			printf("whole body found in first recv\n");
+			printfid("Whole body found", *tid);
 		}
 
 		http_request->body = xmalloc(http_request->content_length + 1);
@@ -387,7 +394,7 @@ int handle_request(
 
 		// move the originally (potentially) captured body content
 		// into the proper body container: http_request->body
-		memcpy(http_request->body, body_start, http_request->content_length); // bs_size is greater than content length
+		memcpy(http_request->body, body_start, http_request->content_length);
 
 		if (recv_body_chunks(
 			client_fd, 
@@ -395,7 +402,7 @@ int handle_request(
 			(size_t) http_request->content_length, 
 			&body_length
 		) == -1) {
-			printf("Failed to recieve body chunks\n");
+			printfid("Failed to recieve body chunks", *tid);
 			return -1;
 		}
 
@@ -465,13 +472,15 @@ void *http_worker(
 			} else {
 				fd = events[n].data.fd;
 
+				printf("BEFORE:\nSIZEOF REQUEST: %ld\nSIZEOF RESPONSE: %ld\n", sizeof(http_request), sizeof(http_response));
 				memset(&http_request, 0, sizeof(http_request));
 				memset(&http_response, 0, sizeof(http_response));
+				printf("AFTER:\nSIZEOF REQUEST: %ld\nSIZEOF RESPONSE: %ld\n", sizeof(http_request), sizeof(http_response));
 
 				ps_cap(&speed.start);
 				// ps_print_pit(&speed.start, tid_p);
 				
-				if (handle_request(&fd, &http_request, &http_response) == -1) {
+				if (handle_request(&fd, &tid, &http_request, &http_response) == -1) {
 					send_json_response(&fd, 200, "{\"error\": \"Failed to handle request\", \"success\": false}");
 					printfid("handle_request", tid);
 				}

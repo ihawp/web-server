@@ -1,0 +1,1 @@
+valgrind -s -v --leak-check=full --show-leaks-kinds=all ./build/server 3000 >> valigrind.txt 2>&1

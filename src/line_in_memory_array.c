@@ -29,6 +29,9 @@ void freelima(
 	LIMArray *arr
 ) {
 	if (!arr) return;
+	for (size_t i = 0; i < arr->count; i++) {
+        free(arr->pointer[i].pointer);  // free each owned string
+    }
 	free(arr->pointer);
 	arr->pointer = NULL;
 	arr->count = 0;

@@ -102,6 +102,7 @@ LIMArray find_header_bounds(
 
 int handle_request(
 	int *client_fd,
+	int *tid,
 	HTTPRequest *http_request,
 	HTTPResponse *http_response
 );
