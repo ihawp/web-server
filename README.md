@@ -2,6 +2,7 @@
 
 ## Issues:
 - Memory leaks (detected with Valgrind)
+- HTTPRequest and HTTPResponse ownership issues
 
 ## What exists?
 

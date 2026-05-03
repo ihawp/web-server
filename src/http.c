@@ -189,9 +189,8 @@ int parse_headers(
 	//	0x20: ` `
 	//	0x3A: `:`
 
-	// why did I do this?
-	// why am I reading the memory like this?
-	
+	// should be read to http_request,
+	// http_request should own all user sent data.
 	http_response->headers = xmalloc(sizeof(LIMArray));
 	LIMArray lim_array = {0};
 	*http_response->headers = lim_array; 
