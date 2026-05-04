@@ -20,7 +20,7 @@
 #define CHAR_SIZE sizeof(char)
 
 typedef struct {
-	LIMArray *headers;
+	LIMArray *headers; // contains pointers to each 'line' in headers_storage
 	char *body;
 	long content_length;
 	char method[REQ_METHOD_SIZE];

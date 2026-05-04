@@ -1,6 +1,6 @@
 #!/bin/bash
 
-gcc -iquote ./src/include src/*.c -o build/server -lpthread
+./shell/build.sh
 
 if [ $? -ne 0 ]; then
     echo 'Compilation failed'

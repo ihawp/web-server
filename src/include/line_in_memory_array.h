@@ -11,6 +11,7 @@ typedef struct {
 	LineInMemory *pointer;
 	size_t count;
 	size_t capacity;
+	char *storage_location;
 } LIMArray;
 
 LineInMemory lim(
@@ -21,7 +22,8 @@ LineInMemory lim(
 LIMArray lima(
 	LineInMemory *pointer,
 	size_t count,
-	size_t capacity
+	size_t capacity,
+	char *storage_location
 );
 
 void freelima(

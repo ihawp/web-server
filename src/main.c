@@ -15,7 +15,6 @@
 #include <errno.h>
 #include <pthread.h>
 #include <sys/epoll.h>
-#include <sys/syscall.h>
 
 #include "http.h"
 #include "helpers.h"
@@ -56,6 +55,9 @@ int main(
 		printfid("Failed to listen", data.pid);
 		exit(EXIT_FAILURE);
 	}
+
+	printf("\e[1;1H\e[2J");
+	printfid("Server listening on port %s", data.pid, port);
 	
 	epc = epoll_create1(0);
 	ev.events = EPOLLIN | EPOLLEXCLUSIVE;
@@ -74,8 +76,6 @@ int main(
 		pthread_create(&workers[i], NULL, (void*) http_worker, &data);
 	}
 
-	printf("\e[1;1H\e[2J");
-	printfid("Server listening on port %s", data.pid, port);
 	pause();
 }
 

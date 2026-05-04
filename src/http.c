@@ -26,12 +26,13 @@ void free_http_request(
 	HTTPRequest *hrq
 ) {
 	freelima(hrq->headers);
-	memset(hrq->method, 0, REQ_METHOD_SIZE);
-	memset(hrq->path, 0, REQ_PATH_SIZE);
-	memset(hrq->http_version, 0, REQ_HTTP_VERSION_SIZE);
+	free(hrq->headers);
 	memset(hrq->body, 0, hrq->content_length);
 	free(hrq->body);
 	hrq->content_length = 0;
+	memset(hrq->method, 0, REQ_METHOD_SIZE);
+	memset(hrq->path, 0, REQ_PATH_SIZE);
+	memset(hrq->http_version, 0, REQ_HTTP_VERSION_SIZE);
 }
 
 char *file_to_content_type(
@@ -178,6 +179,9 @@ int parse_headers(
 ) {
 	//	0x20: ` `
 	//	0x3A: `:`
+	StringView key;
+	char *endptr;
+	long content_length;
 
 	// should be read to http_request,
 	// http_request should own all user sent data.
@@ -189,20 +193,32 @@ int parse_headers(
 			.count = http_request->headers->pointer[i].count
 		};
 	 	
-		StringView key = split_by_delim(&value, 0x3A);
-
+		key = split_by_delim(&value, 0x3A);
 		if (key.count == 0) continue;
 
 		trim_by_delim(&key, 0x20);
 		trim_by_delim(&value, 0x20);
 
+		#define HDR(name) strncmp(key.string, name, key.count) == 0
+
 		// capture value from content-length header
-		if (strncmp(key.string, "Content-Length", key.count) == 0) {
-			char *endptr;
-			long content_length = strtol(value.string, &endptr, 10); // convert to base 10
+		if (HDR("Content-Length")) {
+			*endptr;
+			content_length = strtol(value.string, &endptr, 10); // convert to base 10
 			http_request->content_length = content_length;
 			continue;
 		}
+
+		#undef HDR
+
+		/*
+		if (strncmp(key.string, "Content-Length", key.count) == 0) {
+			*endptr;
+			content_length = strtol(value.string, &endptr, 10); // convert to base 10
+			http_request->content_length = content_length;
+			continue;
+		}
+			*/
 	}
 
 	return 0;
@@ -226,6 +242,10 @@ int extract_path_method_version(
 	StringView fsvh = split_by_delim(&svh, 0x20);
 	StringView path = split_by_delim(&svh, 0x20);
 
+	if (path.count >= REQ_PATH_SIZE) {
+		return -1; // return a 414
+	}
+
 	SV_to_memory(req->method, REQ_METHOD_SIZE, &fsvh);
 	SV_to_memory(req->path, REQ_PATH_SIZE, &path);
 	SV_to_memory(req->http_version, REQ_HTTP_VERSION_SIZE, &svh);
@@ -235,12 +255,13 @@ int extract_path_method_version(
 }
 
 LIMArray find_header_bounds(
-	char *req
+	char *headers
 ) {
-	StringView s = sv(req);
-	
+	StringView s = sv(headers);
 	LIMArray lim_array = {0};
 	int last_line = 0;
+
+	lim_array.storage_location = headers;
 	
 	for (int i = 0; i < s.count; i++) {
 		if (i + 1 >= s.count) break;
@@ -293,7 +314,8 @@ int recv_body_chunks(
 		int status = recv_chunks(
 			client_fd,
 			buffer,
-			body_length,
+			body_length, // is total count of bytes received for body
+						 // is incremented inside recv_chunks
 			&content_length
 		);
 
@@ -323,6 +345,7 @@ int handle_request(
 	char *headers = xmalloc(CLIENT_BUF_SIZE), *body_start;
 	ssize_t recv_count = 0;
 	size_t bs_size, body_length;
+	LIMArray lim_array = {0};
 
 	if (headers == NULL) {
 		printfid("Failed to allocate memory for body", *tid);
@@ -337,13 +360,13 @@ int handle_request(
 
 	// ths bs_size tells us how many characters the actual headers are
 	// the recv_count - bs_size = the length of body
-	// already added, which will be used as the 3rd parameter of memmove
+	// already added, which will be used as the 3rd parameter of memcpy
 	bs_size = body_start - headers;
 	body_length = recv_count - bs_size - 4; // remove 4 for \r\n\r\n
 	*body_start = '\0'; // add a null terminator for end of headers
 	body_start += 4; // move past \0\n\r\n to start of body content
 
-	LIMArray lim_array = find_header_bounds(headers);
+	lim_array = find_header_bounds(headers);
 	if (lim_array.count == 0) {
 		printfid("Failed to find any header info.", *tid);
 		return -1;
@@ -352,7 +375,7 @@ int handle_request(
 	http_request->headers = xmalloc(sizeof(LIMArray));
 	if (http_request->headers == NULL) return -1;
 	*http_request->headers = lim_array;
-	
+
 	if (extract_path_method_version(http_request) == -1) {
 		printfid("Failed to extract_path_method_version", *tid);
 		return -1;
@@ -364,11 +387,11 @@ int handle_request(
 	};
 
 	if (strcmp(http_request->method, "POST") == 0) {
-		if (http_request->content_length >= MAX_CONTENT_LENGTH - CLIENT_BUF_SIZE) {
+		if (http_request->content_length 
+			>= MAX_CONTENT_LENGTH - CLIENT_BUF_SIZE - 1) {
 			return -1; // can start making custom error codes #define OVER_LIMIT 10 for preset error responses (in json or etc)
 		}
 
-		printfid("BODY LENGTH: %ld\nCONTENT_LENGTH: %ld", *tid, body_length, http_request->content_length);
 		if (body_length == http_request->content_length) {
 			printfid("Whole body found", *tid);
 		}
@@ -378,7 +401,11 @@ int handle_request(
 
 		// move the originally (potentially) captured body content
 		// into the proper body container: http_request->body
-		memcpy(http_request->body, body_start, http_request->content_length);
+		memmove(
+			http_request->body, 
+			body_start, 
+			body_length // I thought you had to pass the size of the buffer for some reason, sorry <3
+		);
 
 		if (recv_body_chunks(
 			client_fd, 
@@ -392,7 +419,6 @@ int handle_request(
 
 		send_json_response(client_fd, 200, "{\"success\": true, \"message\": \"We recieved your data!\"}");
 		
-		free(headers);
 		return 0;
 	}
 
@@ -401,11 +427,8 @@ int handle_request(
 			return -1;
 		}
 
-		free(headers);
 		return 0;
 	}
-
-	free(headers);
 
 	return -1;
 }
