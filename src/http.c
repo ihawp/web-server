@@ -19,20 +19,7 @@
 void free_http_response(
 	HTTPResponse *htr
 ) {
-	freelima(htr->headers);
-}
-
-int add_header(
-	HTTPResponse *htr,
-	char *header 
-) {
-	// update the size of the body
-	// TODO: #define at TOF
-	char *new_header = xmalloc(HEADER_SIZE);
-	if (new_header == NULL) return -1;
-	LineInMemory new_lim = lim(new_header, HEADER_SIZE);
-	arr_append((*htr->headers), new_lim);
-	return 0;
+	htr->status = 0;
 }
 
 void free_http_request(
@@ -42,6 +29,9 @@ void free_http_request(
 	memset(hrq->method, 0, REQ_METHOD_SIZE);
 	memset(hrq->path, 0, REQ_PATH_SIZE);
 	memset(hrq->http_version, 0, REQ_HTTP_VERSION_SIZE);
+	memset(hrq->body, 0, hrq->content_length);
+	free(hrq->body);
+	hrq->content_length = 0;
 }
 
 char *file_to_content_type(
@@ -191,10 +181,6 @@ int parse_headers(
 
 	// should be read to http_request,
 	// http_request should own all user sent data.
-	http_response->headers = xmalloc(sizeof(LIMArray));
-	LIMArray lim_array = {0};
-	*http_response->headers = lim_array; 
-
 	for (int i = 0; i < http_request->headers->count; i++) {
 		if (i == 0) continue;
 
@@ -263,9 +249,8 @@ LIMArray find_header_bounds(
 		if (s.string[i] == 0x0D && s.string[i + 1] == 0x0A) {
 			char *line_start = (last_line == 0) ? s.string : &s.string[last_line + 2];
 			int count = (int)(s.string + i - line_start);
-			LineInMemory l = lim(line_start, count);
-	
-			arr_append(lim_array, l);
+			LineInMemory header_line = lim(line_start, count);
+			arr_append(lim_array, header_line);
 			last_line = i;
 		}
 	}
@@ -329,7 +314,7 @@ int recv_body_chunks(
 
 int handle_request(
 	int *client_fd,
-	int *tid, 
+	pid_t *tid, 
 	HTTPRequest *http_request,
 	HTTPResponse *http_response
 ) {
@@ -383,7 +368,7 @@ int handle_request(
 			return -1; // can start making custom error codes #define OVER_LIMIT 10 for preset error responses (in json or etc)
 		}
 
-		printfid("BODY LENGTH: %ld\nCONTENT_LENGTH: %ld", tid, body_length, http_request->content_length);
+		printfid("BODY LENGTH: %ld\nCONTENT_LENGTH: %ld", *tid, body_length, http_request->content_length);
 		if (body_length == http_request->content_length) {
 			printfid("Whole body found", *tid);
 		}
@@ -407,6 +392,7 @@ int handle_request(
 
 		send_json_response(client_fd, 200, "{\"success\": true, \"message\": \"We recieved your data!\"}");
 		
+		free(headers);
 		return 0;
 	}
 
@@ -414,9 +400,12 @@ int handle_request(
 		if (send_stream_file(client_fd, http_request, http_response) == -1) {
 			return -1;
 		}
-		
+
+		free(headers);
 		return 0;
 	}
+
+	free(headers);
 
 	return -1;
 }
@@ -471,10 +460,8 @@ void *http_worker(
 			} else {
 				fd = events[n].data.fd;
 
-				printf("BEFORE:\nSIZEOF REQUEST: %ld\nSIZEOF RESPONSE: %ld\n", sizeof(http_request), sizeof(http_response));
 				memset(&http_request, 0, sizeof(http_request));
 				memset(&http_response, 0, sizeof(http_response));
-				printf("AFTER:\nSIZEOF REQUEST: %ld\nSIZEOF RESPONSE: %ld\n", sizeof(http_request), sizeof(http_response));
 
 				ps_cap(&speed.start);
 				// ps_print_pit(&speed.start, tid_p);
@@ -497,41 +484,4 @@ void *http_worker(
 	}
 
 	printfid("Worker Exiting", tid);
-}
-
-void http_server(
-	int sfd,
-	char *port
-) {
-	int epc, result, client_fd, i, n, ectl;
-	struct epoll_event ev, events[MAX_EVENTS] = {0};
-	pthread_t workers[MAX_WORKERS];
-	struct process_data data = {0};
-
-	data.pid = getpid();
-
-	if (listen(sfd, SOMAXCONN) == -1) {
-		printfid("Failed to listen", data.pid);
-		exit(EXIT_FAILURE);
-	}
-	
-	printf("\e[1;1H\e[2J");
-	printfid("Server listening on port %s", data.pid, port);
-
-	epc = epoll_create1(0);
-	ev.events = EPOLLIN | EPOLLEXCLUSIVE;
-	ev.data.fd = sfd;
-	if (epoll_ctl(epc, EPOLL_CTL_ADD, sfd, &ev) == -1) {
-		printfid("sfd epoll_ctl", data.pid);
-		exit(EXIT_FAILURE);
-	}
-
-	data.epc = epc;
-	data.sfd = sfd;
-	pthread_mutex_init(&data.lock, NULL);
-    pthread_cond_init(&data.ready, NULL);
-
-	for (i = 0; i < MAX_WORKERS; i++) {
-		pthread_create(&workers[i], NULL, (void*) http_worker, &data);
-	}
 }

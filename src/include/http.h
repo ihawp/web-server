@@ -29,8 +29,6 @@ typedef struct {
 } HTTPRequest;
 
 typedef struct {
-	LIMArray *headers;
-	StringView body;
 	int status;
 } HTTPResponse;
 
@@ -102,16 +100,11 @@ LIMArray find_header_bounds(
 
 int handle_request(
 	int *client_fd,
-	int *tid,
+	pid_t *tid,
 	HTTPRequest *http_request,
 	HTTPResponse *http_response
 );
 
 void *http_worker(
 	void *data
-);
-
-void http_server(
-	int sfd,
-	char *port
 );

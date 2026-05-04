@@ -18,7 +18,7 @@ void *xmalloc(
 
 void printfid(
 	const char *format, 
-	int id, 
+	pid_t id, 
 	...
 ) {
 	va_list args;
