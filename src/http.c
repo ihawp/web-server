@@ -86,7 +86,9 @@ void send_json_response(
 	char *error_message	
 ) {
 	char message[RESPONSE_BUF_SIZE];
-	int message_length = snprintf(
+	int message_length;
+
+	message_length = snprintf(
 		message,
 		sizeof(message),
 		"HTTP/1.1 %d %s\r\n"
@@ -108,30 +110,33 @@ int send_stream_file(
 	HTTPRequest *http_request,
 	HTTPResponse *http_response
 ) {
+
+	char buffer[CHUNK_SIZE], public_path[PATH_SIZE], response[CHUNK_SIZE], hex_header[16], *content_type, *fm;
+	int response_len, byte_count, hex_header_len;
+	FILE *f;
+
+
 	if (strcmp(http_request->path, "/") == 0) {
 		strcpy(http_request->path, "index.html");
 	}
 
-	char buffer[CHUNK_SIZE];
-	char public_path[PATH_SIZE];
 	snprintf(public_path, PATH_SIZE, "public/%s", http_request->path);
 
-	char *content_type = file_to_content_type(http_request->path);
+	content_type = file_to_content_type(http_request->path);
 	
-	char *fm = "r";
+	fm = "r"; // file mode
 	if (strncmp(content_type, "image", 5) == 0) { 
 		fm = "rb";
 	}
 
-	FILE *f = fopen(public_path, fm);
+	f = fopen(public_path, fm);
 	if (f == NULL) {
 		return -1;
 	}
 
 	http_response->status = 200;
 
-	char response[CHUNK_SIZE];
-	int response_len = snprintf(
+	response_len = snprintf(
 		response, 
 		sizeof(response), 
 		"HTTP/1.1 %d %s\r\n"
@@ -147,13 +152,12 @@ int send_stream_file(
 
 	for (;;) {
 		// -2 for trailing \r\n
-		int byte_count = fread(buffer, CHAR_SIZE, CHUNK_SIZE - 2, f);
+		byte_count = fread(buffer, CHAR_SIZE, CHUNK_SIZE - 2, f);
 	
 		if (byte_count) {
 			memcpy(buffer + byte_count, "\r\n", 2);
 
-			char hex_header[16];
-			int hex_header_len = snprintf(
+			hex_header_len = snprintf(
 				hex_header, 
 				sizeof(hex_header), 
 				"%x\r\n", 
@@ -182,12 +186,11 @@ int parse_headers(
 	StringView key;
 	char *endptr;
 	long content_length;
+	int i;
 
 	// should be read to http_request,
 	// http_request should own all user sent data.
-	for (int i = 0; i < http_request->headers->count; i++) {
-		if (i == 0) continue;
-
+	for (i = 1; i < http_request->headers->count; i++) {
 		StringView value = {
 			.string = http_request->headers->pointer[i].pointer,
 			.count = http_request->headers->pointer[i].count
@@ -203,22 +206,12 @@ int parse_headers(
 
 		// capture value from content-length header
 		if (HDR("Content-Length")) {
-			*endptr;
 			content_length = strtol(value.string, &endptr, 10); // convert to base 10
 			http_request->content_length = content_length;
 			continue;
 		}
 
 		#undef HDR
-
-		/*
-		if (strncmp(key.string, "Content-Length", key.count) == 0) {
-			*endptr;
-			content_length = strtol(value.string, &endptr, 10); // convert to base 10
-			http_request->content_length = content_length;
-			continue;
-		}
-			*/
 	}
 
 	return 0;
@@ -227,10 +220,13 @@ int parse_headers(
 int extract_path_method_version(
 	HTTPRequest *req
 ) {
-	char *header = xmalloc(req->headers->pointer[0].count + 1);
+	char *header;
+	int size;
+
+	header = xmalloc(req->headers->pointer[0].count + 1);
 	if (header == NULL) return -1;
 
-	int size = snprintf(
+	size = snprintf(
 		header,
 		req->headers->pointer[0].count + 1,
 		SV_fmt, 
@@ -259,7 +255,9 @@ LIMArray find_header_bounds(
 ) {
 	StringView s = sv(headers);
 	LIMArray lim_array = {0};
-	int last_line = 0;
+	int last_line = 0, count;
+	char *line_start;
+	LineInMemory header_line;
 
 	lim_array.storage_location = headers;
 	
@@ -268,9 +266,9 @@ LIMArray find_header_bounds(
 	
 		// Checks for \r\n (carriage return, newline)
 		if (s.string[i] == 0x0D && s.string[i + 1] == 0x0A) {
-			char *line_start = (last_line == 0) ? s.string : &s.string[last_line + 2];
-			int count = (int)(s.string + i - line_start);
-			LineInMemory header_line = lim(line_start, count);
+			line_start = (last_line == 0) ? s.string : &s.string[last_line + 2];
+			count = (int)(s.string + i - line_start);
+			header_line = lim(line_start, count);
 			arr_append(lim_array, header_line);
 			last_line = i;
 		}
@@ -308,10 +306,12 @@ int recv_body_chunks(
 	size_t content_length,
 	size_t *body_length
 ) {
+	int status;
+
 	for (;;) {
 		if (*body_length >= content_length) break;
 
-		int status = recv_chunks(
+		status = recv_chunks(
 			client_fd,
 			buffer,
 			body_length, // is total count of bytes received for body
@@ -389,7 +389,7 @@ int handle_request(
 	if (strcmp(http_request->method, "POST") == 0) {
 		if (http_request->content_length 
 			>= MAX_CONTENT_LENGTH - CLIENT_BUF_SIZE - 1) {
-			return -1; // can start making custom error codes #define OVER_LIMIT 10 for preset error responses (in json or etc)
+			return -1; // TODO: can start making custom error codes #define OVER_LIMIT 10 for preset error responses (in json or etc)
 		}
 
 		if (body_length == http_request->content_length) {
@@ -404,7 +404,7 @@ int handle_request(
 		memmove(
 			http_request->body, 
 			body_start, 
-			body_length // I thought you had to pass the size of the buffer for some reason, sorry <3
+			body_length
 		);
 
 		if (recv_body_chunks(

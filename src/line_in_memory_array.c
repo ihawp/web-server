@@ -38,17 +38,18 @@ void freelim(
 void freelima(
 	LIMArray *arr
 ) {
+	int i;
+
 	if (!arr) return;
 
-	// need to loop over the items and free them individually
-	for (int i = 0; i < arr->count; i++) {
+	for (i = 0; i < arr->count; i++) {
 		freelim(&arr->pointer[i]);
 	}
-
-	// memset() need to memset the storage location to 0, but don't
+	
 	memset(arr->storage_location, 0, strlen(arr->storage_location));
 	free(arr->storage_location);
 	free(arr->pointer);
+	
 	arr->storage_location = NULL;
 	arr->pointer = NULL;
 	arr->count = 0;

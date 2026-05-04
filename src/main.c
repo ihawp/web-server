@@ -1,18 +1,4 @@
-/*
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
-#include <stdlib.h>
-#include <pthread.h>
-#include "tcp_server.h"
-#include "http.h"
-*/
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <sys/socket.h>
-#include <netdb.h>
-#include <errno.h>
 #include <pthread.h>
 #include <sys/epoll.h>
 
@@ -78,34 +64,3 @@ int main(
 
 	pause();
 }
-
-/*
-int main(
-	int argc,
-	char **argv
-) {
-	char *port;
-	int sfd;
-
-	if (argc < 2) {
-		printf(
-			"Server startup failed, try:\n\n"
-			"<Server Name> <PORT>\n\n"
-			"Example:\n\n"
-			"./server 2222\n"
-		);
-		exit(EXIT_FAILURE);
-	}
-
-	port = argv[1];
-	sfd = tcp_server(port);
-
-	if (sfd == -1) {
-		exit(EXIT_FAILURE);
-	}
-
-	http_server(sfd, port);
-
-	pause();
-}
-*/

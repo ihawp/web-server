@@ -21,16 +21,26 @@ void enqueue(ListNodeManager *q, int client_fd) {
 }
 
 int dequeue(ListNodeManager *q) {
+    int fd;
+    ListNode *node;
+
     pthread_mutex_lock(&q->lock);
-    while (q->head == NULL)
+    
+    while (q->head == NULL) {
         pthread_cond_wait(&q->ready, &q->lock);
+    }
 
-    ListNode *node = q->head;
-    int fd = node->fd;
+    node = q->head;
+    fd = node->fd;
     q->head = node->next;
-    if (q->head == NULL) q->tail = NULL;  // queue is now empty
-    pthread_mutex_unlock(&q->lock);
 
+    if (q->head == NULL) {
+        q->tail = NULL;
+        // queue is now empty
+    }
+    
+    pthread_mutex_unlock(&q->lock);
     free(node);
+
     return fd;
 }

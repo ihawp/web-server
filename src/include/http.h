@@ -20,7 +20,7 @@
 #define CHAR_SIZE sizeof(char)
 
 typedef struct {
-	LIMArray *headers; // contains pointers to each 'line' in headers_storage
+	LIMArray *headers;
 	char *body;
 	long content_length;
 	char method[REQ_METHOD_SIZE];
@@ -59,7 +59,6 @@ void send_json_response(
 	char *error_message	
 );
 
-// This should accept an already open and tested fd, rather than have the 404 loop if f == null and what not.
 int send_stream_file(
 	int *client_fd,
 	HTTPRequest *http_request,

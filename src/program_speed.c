@@ -20,7 +20,9 @@ void ps_print_elapsed(
     struct program_speed *ps,
     int *tid
 ) {
-    long elapsed_ns = (ps->end.tv_sec - ps->start.tv_sec) * 1000000000L
+    long elapsed_ns;
+
+    elapsed_ns = (ps->end.tv_sec - ps->start.tv_sec) * 1000000000L
                     + (ps->end.tv_nsec - ps->start.tv_nsec);
     printfid("Elapsed: %ld ns (%.3f ms)", *tid, elapsed_ns, elapsed_ns / 1e6);
 }
