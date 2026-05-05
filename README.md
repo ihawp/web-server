@@ -9,7 +9,8 @@
 - [getaddrinfo (w/UDP example)](https://man7.org/linux/man-pages/man3/getaddrinfo.3.html)
 - [epoll (w/usage example)](https://www.man7.org/linux/man-pages/man7/epoll.7.html)
 - [pthread](https://man7.org/linux/man-pages/man7/pthreads.7.html)
-- [Tsoding](https://www.youtube.com/tsoding)
+- [Threads](https://cs341.cs.illinois.edu/coursebook/Threads)
+- Hash Table: [Repository](https://github.com/benhoyt/ht) & [Article](https://benhoyt.com/writings/hash-table-in-c/)
 
 ## About
 

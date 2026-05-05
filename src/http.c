@@ -15,6 +15,8 @@
 #include "helpers.h"
 #include "tcp_server.h"
 #include "process_data.h"
+#include "hash_table.h"
+#include "string_view.h"
 
 void free_http_response(
 	HTTPResponse *htr
@@ -25,8 +27,10 @@ void free_http_response(
 void free_http_request(
 	HTTPRequest *hrq
 ) {
-	freelima(hrq->headers);
-	free(hrq->headers);
+	// freelima(hrq->headers);
+	
+	ht_destroy(hrq->headers);
+	
 	memset(hrq->body, 0, hrq->content_length);
 	free(hrq->body);
 	hrq->content_length = 0;
@@ -115,7 +119,6 @@ int send_stream_file(
 	int response_len, byte_count, hex_header_len;
 	FILE *f;
 
-
 	if (strcmp(http_request->path, "/") == 0) {
 		strcpy(http_request->path, "index.html");
 	}
@@ -177,6 +180,7 @@ int send_stream_file(
 	return 0;
 }
 
+/*
 int parse_headers(
 	HTTPRequest *http_request,
 	HTTPResponse *http_response
@@ -190,7 +194,7 @@ int parse_headers(
 
 	// should be read to http_request,
 	// http_request should own all user sent data.
-	for (i = 1; i < http_request->headers->count; i++) {
+	for (i = 0; i < http_request->headers->length; i++) {
 		StringView value = {
 			.string = http_request->headers->pointer[i].pointer,
 			.count = http_request->headers->pointer[i].count
@@ -216,25 +220,19 @@ int parse_headers(
 
 	return 0;
 }
+*/
 
 int extract_path_method_version(
-	HTTPRequest *req
+	HTTPRequest *req,
+	char *header,
+	int count
 ) {
-	char *header;
-	int size;
+	printf("EXTRACTING\n");
 
-	header = xmalloc(req->headers->pointer[0].count + 1);
-	if (header == NULL) return -1;
-
-	size = snprintf(
-		header,
-		req->headers->pointer[0].count + 1,
-		SV_fmt, 
-		(int) req->headers->pointer[0].count,
-		req->headers->pointer[0].pointer
-	);
-	
-	StringView svh = sv(header);
+	StringView svh = (StringView) {
+		.string = header,
+		.count = count
+	};
 	StringView fsvh = split_by_delim(&svh, 0x20);
 	StringView path = split_by_delim(&svh, 0x20);
 
@@ -246,35 +244,62 @@ int extract_path_method_version(
 	SV_to_memory(req->path, REQ_PATH_SIZE, &path);
 	SV_to_memory(req->http_version, REQ_HTTP_VERSION_SIZE, &svh);
 
-	free(header);
 	return 0;
 }
 
-LIMArray find_header_bounds(
+int find_headers(
+	HTTPRequest *http_request,
 	char *headers
 ) {
-	StringView s = sv(headers);
-	LIMArray lim_array = {0};
+	http_request->headers = ht_create();
+	StringView s = sv(headers), key = {0}, value = {0};
 	int last_line = 0, count;
 	char *line_start;
-	LineInMemory header_line;
 
-	lim_array.storage_location = headers;
-	
 	for (int i = 0; i < s.count; i++) {
-		if (i + 1 >= s.count) break;
+		if (i + 1 >= s.count) {
+			break;
+		}
 	
 		// Checks for \r\n (carriage return, newline)
 		if (s.string[i] == 0x0D && s.string[i + 1] == 0x0A) {
+
 			line_start = (last_line == 0) ? s.string : &s.string[last_line + 2];
 			count = (int)(s.string + i - line_start);
-			header_line = lim(line_start, count);
-			arr_append(lim_array, header_line);
+
+			if (last_line == 0) {
+				if (extract_path_method_version(http_request, line_start, count) != 0) {
+					printf("Failed to extract\n");
+					break;
+				}
+
+				last_line = i;
+				continue;
+			}
+
+			value = (StringView) {
+				.string = line_start, 
+				.count = count
+			};
+			key = split_by_delim(&value, 0x3A);
+
+			if (key.count == 0) {
+				continue;
+			}
+
+			char keybuffer[key.count + 1], valuebuffer[value.count + 1];
+
+			trim_by_delim(&key, 0x20);
+			trim_by_delim(&value, 0x20);
+			SV_to_memory(keybuffer, key.count + 1, &key);
+			SV_to_memory(valuebuffer, value.count + 1, &value);
+			ht_set(http_request->headers, keybuffer, valuebuffer);
+			printf("KEY: %s\nVALUE: %s\n", keybuffer, valuebuffer);
 			last_line = i;
 		}
 	}
 
-	return lim_array;
+	return http_request->headers->length;
 }
 
 char *recv_header_chunks(
@@ -322,8 +347,6 @@ int recv_body_chunks(
 		if (status == 1) continue;
 		if (status == -1 || status == 2) {
 			if (*body_length == 0) {
-				free(buffer);
-				buffer = NULL;
 				return -1;
 			}
 			break;
@@ -345,10 +368,10 @@ int handle_request(
 	char *headers = xmalloc(CLIENT_BUF_SIZE), *body_start;
 	ssize_t recv_count = 0;
 	size_t bs_size, body_length;
-	LIMArray lim_array = {0};
+	int r;
 
 	if (headers == NULL) {
-		printfid("Failed to allocate memory for body", *tid);
+		printfid("Failed to allocate memory for headers", *tid);
 		return -1;
 	}
 
@@ -366,25 +389,13 @@ int handle_request(
 	*body_start = '\0'; // add a null terminator for end of headers
 	body_start += 4; // move past \0\n\r\n to start of body content
 
-	lim_array = find_header_bounds(headers);
-	if (lim_array.count == 0) {
-		printfid("Failed to find any header info.", *tid);
+
+	r = find_headers(http_request, headers);
+	free(headers);
+
+	if (r == 0) {
 		return -1;
 	}
-
-	http_request->headers = xmalloc(sizeof(LIMArray));
-	if (http_request->headers == NULL) return -1;
-	*http_request->headers = lim_array;
-
-	if (extract_path_method_version(http_request) == -1) {
-		printfid("Failed to extract_path_method_version", *tid);
-		return -1;
-	}
-
-	if (parse_headers(http_request, http_response) == -1) {
-		printfid("Failed to parse headers", *tid);
-		return -1;
-	};
 
 	if (strcmp(http_request->method, "POST") == 0) {
 		if (http_request->content_length 
@@ -401,11 +412,7 @@ int handle_request(
 
 		// move the originally (potentially) captured body content
 		// into the proper body container: http_request->body
-		memmove(
-			http_request->body, 
-			body_start, 
-			body_length
-		);
+		memmove(http_request->body, body_start, body_length);
 
 		if (recv_body_chunks(
 			client_fd, 
@@ -487,15 +494,14 @@ void *http_worker(
 				memset(&http_response, 0, sizeof(http_response));
 
 				ps_cap(&speed.start);
-				// ps_print_pit(&speed.start, tid_p);
 				
-				if (handle_request(&fd, &tid, &http_request, &http_response) == -1) {
-					send_json_response(&fd, 200, "{\"error\": \"Failed to handle request\", \"success\": false}");
-					printfid("handle_request", tid);
+				int r = handle_request(&fd, &tid, &http_request, &http_response);
+				if (r < 0) {
+					printfid("handle_request result: %d\n", tid, r);
+					send_json_response(&fd, 400, "{\"error\": \"Failed to handle request\", \"success\": false}");
 				}
 
 				ps_cap(&speed.end);
-				// ps_print_pit(&speed.end, tid_p);
 				ps_print_elapsed(&speed, tid_p);
 
 				free_http_request(&http_request);
