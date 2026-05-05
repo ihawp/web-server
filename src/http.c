@@ -30,6 +30,7 @@ void free_http_request(
 	// freelima(hrq->headers);
 	
 	ht_destroy(hrq->headers);
+	free(hrq->header_storage);
 	
 	memset(hrq->body, 0, hrq->content_length);
 	free(hrq->body);
@@ -180,55 +181,11 @@ int send_stream_file(
 	return 0;
 }
 
-/*
-int parse_headers(
-	HTTPRequest *http_request,
-	HTTPResponse *http_response
-) {
-	//	0x20: ` `
-	//	0x3A: `:`
-	StringView key;
-	char *endptr;
-	long content_length;
-	int i;
-
-	// should be read to http_request,
-	// http_request should own all user sent data.
-	for (i = 0; i < http_request->headers->length; i++) {
-		StringView value = {
-			.string = http_request->headers->pointer[i].pointer,
-			.count = http_request->headers->pointer[i].count
-		};
-	 	
-		key = split_by_delim(&value, 0x3A);
-		if (key.count == 0) continue;
-
-		trim_by_delim(&key, 0x20);
-		trim_by_delim(&value, 0x20);
-
-		#define HDR(name) strncmp(key.string, name, key.count) == 0
-
-		// capture value from content-length header
-		if (HDR("Content-Length")) {
-			content_length = strtol(value.string, &endptr, 10); // convert to base 10
-			http_request->content_length = content_length;
-			continue;
-		}
-
-		#undef HDR
-	}
-
-	return 0;
-}
-*/
-
 int extract_path_method_version(
 	HTTPRequest *req,
 	char *header,
 	int count
 ) {
-	printf("EXTRACTING\n");
-
 	StringView svh = (StringView) {
 		.string = header,
 		.count = count
@@ -293,8 +250,12 @@ int find_headers(
 			trim_by_delim(&value, 0x20);
 			SV_to_memory(keybuffer, key.count + 1, &key);
 			SV_to_memory(valuebuffer, value.count + 1, &value);
+
+			if (strcmp(keybuffer, "Content-Length") == 0) {
+				http_request->content_length = strtol(valuebuffer, NULL, 10);
+			}
+
 			ht_set(http_request->headers, keybuffer, valuebuffer);
-			printf("KEY: %s\nVALUE: %s\n", keybuffer, valuebuffer);
 			last_line = i;
 		}
 	}
@@ -383,29 +344,32 @@ int handle_request(
 
 	// ths bs_size tells us how many characters the actual headers are
 	// the recv_count - bs_size = the length of body
-	// already added, which will be used as the 3rd parameter of memcpy
+	// already added, which will be used as the 3rd parameter of memmove
 	bs_size = body_start - headers;
 	body_length = recv_count - bs_size - 4; // remove 4 for \r\n\r\n
 	*body_start = '\0'; // add a null terminator for end of headers
 	body_start += 4; // move past \0\n\r\n to start of body content
 
+	// store the malloc'd headers for later free'ing
+	// I will not have free(headers) on all failure paths
+	http_request->header_storage = headers;
 
-	r = find_headers(http_request, headers);
-	free(headers);
-
-	if (r == 0) {
+	if (find_headers(http_request, headers) == 0) {
 		return -1;
 	}
 
 	if (strcmp(http_request->method, "POST") == 0) {
-		if (http_request->content_length 
-			>= MAX_CONTENT_LENGTH - CLIENT_BUF_SIZE - 1) {
+
+		if (http_request->content_length >= MAX_CONTENT_LENGTH - CLIENT_BUF_SIZE - 1) {
 			return -1; // TODO: can start making custom error codes #define OVER_LIMIT 10 for preset error responses (in json or etc)
 		}
 
 		if (body_length == http_request->content_length) {
 			printfid("Whole body found", *tid);
 		}
+
+		printf("BODY LENGTH: %ld\n", body_length);
+		printf("CONTENT LENGTH: %ld\n", http_request->content_length);
 
 		http_request->body = xmalloc(http_request->content_length + 1);
 		if (http_request->body == NULL) return -1;

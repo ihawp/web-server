@@ -22,6 +22,7 @@
 
 typedef struct {
 	ht *headers;
+	char *header_storage;
 	char *body;
 	long content_length;
 	char method[REQ_METHOD_SIZE];
@@ -62,11 +63,6 @@ void send_json_response(
 
 int send_stream_file(
 	int *client_fd,
-	HTTPRequest *http_request,
-	HTTPResponse *http_response
-);
-
-int parse_headers(
 	HTTPRequest *http_request,
 	HTTPResponse *http_response
 );
