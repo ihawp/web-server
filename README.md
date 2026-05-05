@@ -32,9 +32,11 @@ When the latter is the case, we use the difference between the pointer at the be
 
 ### Headers
 
-Header bytes are read into memory as described above, but they are parsed differently to the body, instead of copying all headers as individual readable strings, we instead store pointers to the beginning of each header line within the originally allocated header string and process them when we want to check the value.
+Headers are stored in a hash table (per [HTTP/1.1](https://datatracker.ietf.org/doc/rfc9112/)), allowing for O(1) average lookup time per key. 
 
-Some values are stored after being read, such as the content-length which is read into memory as a long using **[strtol(...)](https://man7.org/linux/man-pages/man3/strtol.3.html)**. This value is stored in the **HTTPRequest** struct. Generally, values will not be stored, only the 'answer' to the value may be stored in the **HTTPResponse** struct if it is important.
+Previously, headers were stored inside a `LIMArray` as a `LineInMemory` struct, which contained a pointer to the start of the string and a count outlining how long the string is, so retrieving a specific header required a linear scan through all entries to find a match.
+
+The Content-Length is read into memory as a long using **[strtol(...)](https://man7.org/linux/man-pages/man3/strtol.3.html)** during the **find_headers(...)** call. This value is stored in the **HTTPRequest** struct.
 
 It is safe to assume that the **HTTPRequest** struct will store data from the users request, while the **HTTPResponse** struct will store hints about how to respond to the users request, such as the status code.
 
