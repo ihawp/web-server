@@ -461,7 +461,7 @@ void *http_worker(
 				
 				int r = handle_request(&fd, &tid, &http_request, &http_response);
 				if (r < 0) {
-					printfid("handle_request result: %d\n", tid, r);
+					// have different types of errors to respond about
 					send_json_response(&fd, 400, "{\"error\": \"Failed to handle request\", \"success\": false}");
 				}
 
