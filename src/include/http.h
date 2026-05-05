@@ -4,6 +4,7 @@
 #include <string.h>
 #include "line_in_memory_array.h"
 #include "string_view.h"
+#include "hash_table.h"
 
 // TODO: rename and organize and refactor and rethink!
 #define MAX_EVENTS 10
@@ -20,7 +21,8 @@
 #define CHAR_SIZE sizeof(char)
 
 typedef struct {
-	LIMArray *headers;
+	ht *headers;
+	char *header_storage;
 	char *body;
 	long content_length;
 	char method[REQ_METHOD_SIZE];
@@ -65,13 +67,10 @@ int send_stream_file(
 	HTTPResponse *http_response
 );
 
-int parse_headers(
-	HTTPRequest *http_request,
-	HTTPResponse *http_response
-);
-
 int extract_path_method_version(
-	HTTPRequest *req
+	HTTPRequest *req,
+	char *header,
+	int count
 );
 
 int capture_headers(
@@ -93,8 +92,9 @@ int recv_body_chunks(
 	size_t *body_length
 );
 
-LIMArray find_header_bounds(
-	char *req
+int find_headers(
+	HTTPRequest *http_request,
+	char *headers
 );
 
 int handle_request(

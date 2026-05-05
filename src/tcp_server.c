@@ -51,8 +51,9 @@ int tcp_server(
 			exit(EXIT_FAILURE);
 		}
 
-		bs = bind(sfd, rp->ai_addr, rp->ai_addrlen);
-		if (bs == 0) break;
+		if (bind(sfd, rp->ai_addr, rp->ai_addrlen) == 0) {
+			break;
+		}
 		
 		close(sfd);
 	}

@@ -45,5 +45,5 @@ StringView split_by_delim(
 
 #define SV_fmt "%.*s"
 #define SV_arg(s) (int) (s)->count, (s)->string
-#define SV_print(s) printf("%s"SV_fmt"\n", (s)->string, SV_arg(s))
+#define SV_print(s) printf(SV_fmt"\n", SV_arg(s))
 #define SV_to_memory(h, h_size, s) snprintf(h, h_size, SV_fmt, SV_arg(s))
