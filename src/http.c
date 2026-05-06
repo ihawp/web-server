@@ -32,9 +32,12 @@ void free_http_request(
 		ht_destroy(hrq->headers);
 	}
 
+	if (hrq->body != NULL) {
+		memset(hrq->body, 0, hrq->content_length);
+		free(hrq->body);
+	}
+
 	free(hrq->header_storage);
-	memset(hrq->body, 0, hrq->content_length);
-	free(hrq->body);
 	hrq->content_length = 0;
 	memset(hrq->method, 0, REQ_METHOD_SIZE);
 	memset(hrq->path, 0, REQ_PATH_SIZE);
@@ -110,19 +113,53 @@ void send_json_response(
 	send(*client_fd, message, message_length, 0);
 }
 
+int sanitize_path(
+	char *path
+) {
+	int pstrl = strlen(path);
+	printf("START sanitize_path\n");
+
+	// -7 for "public/"
+	if (pstrl >= PATH_SIZE - 7) {
+		return -1;
+	}
+
+	if (strcmp(path, "/") == 0) {
+		strcpy(path, "index.html");
+	}
+
+	if (memmem(path, pstrl, "../", 3) == 0) {
+		printf("PATH: %s\n", path);
+		printf("Found ../\n");
+	}
+
+	if (memmem(path, pstrl, "../../", 6) == 0) {
+		printf("PATH: %s\n", path);
+		printf("Found ../../\n");
+	}
+
+	if (memmem(path, pstrl, "./", 2) == 0) {
+		printf("PATH: %s\n", path);
+		printf("Found ./\n");
+	}
+	
+	printf("END sanitize_path\n");
+	
+	return 0;
+}
+
 // This should accept an already open and tested fd, rather than have the 404 loop if f == null and what not.
 int send_stream_file(
 	int *client_fd,
 	HTTPRequest *http_request,
 	HTTPResponse *http_response
 ) {
-
 	char buffer[CHUNK_SIZE], public_path[PATH_SIZE], response[CHUNK_SIZE], hex_header[16], *content_type, *fm;
 	int response_len, byte_count, hex_header_len;
 	FILE *f;
 
-	if (strcmp(http_request->path, "/") == 0) {
-		strcpy(http_request->path, "index.html");
+	if (sanitize_path(http_request->path) == -1) {
+		return -1;
 	}
 
 	snprintf(public_path, PATH_SIZE, "public/%s", http_request->path);
@@ -254,6 +291,7 @@ int find_headers(
 
 			if (strcmp(keybuffer, "Content-Length") == 0) {
 				http_request->content_length = strtol(valuebuffer, NULL, 10);
+				printf("CONTENT_LENGTH: %ld\n", http_request->content_length);
 			}
 
 			ht_set(http_request->headers, keybuffer, valuebuffer);
@@ -354,13 +392,13 @@ int handle_request(
 	// store the malloc'd headers for later free'ing
 	// I will not have free(headers) on all failure paths
 	http_request->header_storage = headers;
+	// if I free headers here then the body won't exist for memmove(...)
 
 	if (find_headers(http_request, headers) == 0) {
 		return -1;
 	}
 
 	if (strcmp(http_request->method, "POST") == 0) {
-
 		if (http_request->content_length >= MAX_CONTENT_LENGTH - CLIENT_BUF_SIZE - 1) {
 			return -1; // TODO: can start making custom error codes #define OVER_LIMIT 10 for preset error responses (in json or etc)
 		}
@@ -370,7 +408,10 @@ int handle_request(
 		}
 
 		http_request->body = xmalloc(http_request->content_length + 1);
-		if (http_request->body == NULL) return -1;
+		if (http_request->body == NULL) {
+			printfid("Failed to allocated memory for body", *tid);
+			return -1;
+		}
 
 		// move the originally (potentially) captured body content
 		// into the proper body container: http_request->body
