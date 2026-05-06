@@ -128,19 +128,24 @@ int sanitize_path(
 		strcpy(path, "index.html");
 	}
 
-	if (memmem(path, pstrl, "../", 3) == 0) {
-		printf("PATH: %s\n", path);
-		printf("Found ../\n");
+	char *r;
+
+	r = memmem(path, pstrl, "/../", 3);
+
+	if (r != NULL) {
+		printf("/../: %s", r);
 	}
 
-	if (memmem(path, pstrl, "../../", 6) == 0) {
-		printf("PATH: %s\n", path);
-		printf("Found ../../\n");
-	}
+	r = memmem(path, pstrl, "/./", 2);
 
-	if (memmem(path, pstrl, "./", 2) == 0) {
-		printf("PATH: %s\n", path);
-		printf("Found ./\n");
+	if (r != NULL) {
+		printf("/./: %s", r);
+	}
+	
+	r = memmem(path, pstrl, "/../../", 6);
+
+	if (r != NULL) {
+		printf("/../../: %s", r);
 	}
 	
 	printf("END sanitize_path\n");
@@ -264,37 +269,33 @@ int find_headers(
 
 			if (last_line == 0) {
 				if (extract_path_method_version(http_request, line_start, count) != 0) {
-					printf("Failed to extract\n");
 					break;
 				}
+			} else {
+				value = (StringView) {
+					.string = line_start, 
+					.count = count
+				};
+				key = split_by_delim(&value, 0x3A);
 
-				last_line = i;
-				continue;
+				if (key.count == 0) {
+					continue;
+				}
+
+				char keybuffer[key.count + 1], valuebuffer[value.count + 1];
+
+				trim_by_delim(&key, 0x20);
+				trim_by_delim(&value, 0x20);
+				SV_to_memory(keybuffer, key.count + 1, &key);
+				SV_to_memory(valuebuffer, value.count + 1, &value);
+
+				if (strcmp(keybuffer, "Content-Length") == 0) {
+					http_request->content_length = strtol(valuebuffer, NULL, 10);
+				}
+
+				ht_set(http_request->headers, keybuffer, valuebuffer);
 			}
 
-			value = (StringView) {
-				.string = line_start, 
-				.count = count
-			};
-			key = split_by_delim(&value, 0x3A);
-
-			if (key.count == 0) {
-				continue;
-			}
-
-			char keybuffer[key.count + 1], valuebuffer[value.count + 1];
-
-			trim_by_delim(&key, 0x20);
-			trim_by_delim(&value, 0x20);
-			SV_to_memory(keybuffer, key.count + 1, &key);
-			SV_to_memory(valuebuffer, value.count + 1, &value);
-
-			if (strcmp(keybuffer, "Content-Length") == 0) {
-				http_request->content_length = strtol(valuebuffer, NULL, 10);
-				printf("CONTENT_LENGTH: %ld\n", http_request->content_length);
-			}
-
-			ht_set(http_request->headers, keybuffer, valuebuffer);
 			last_line = i;
 		}
 	}
@@ -315,7 +316,7 @@ char *recv_header_chunks(
 		status = recv_chunks(client_fd, buffer, recv_count, &max_header_size);
 		if (status == -1 || status == 2) return NULL;
 		if (status == 1) continue;
-		mmp = memmem(buffer, *recv_count, "\r\n\r\n", 4); // memmem only finds \r\n\r\n in bytes so I need to pinpoint it
+		mmp = memmem(buffer, *recv_count, "\r\n\r\n", 4);
 		if (mmp != NULL) {
 			buffer[*recv_count] = '\0';
 			return mmp;
@@ -389,10 +390,7 @@ int handle_request(
 	*body_start = '\0'; // add a null terminator for end of headers
 	body_start += 4; // move past \0\n\r\n to start of body content
 
-	// store the malloc'd headers for later free'ing
-	// I will not have free(headers) on all failure paths
 	http_request->header_storage = headers;
-	// if I free headers here then the body won't exist for memmove(...)
 
 	if (find_headers(http_request, headers) == 0) {
 		return -1;
@@ -416,6 +414,9 @@ int handle_request(
 		// move the originally (potentially) captured body content
 		// into the proper body container: http_request->body
 		memmove(http_request->body, body_start, body_length);
+
+		// could free headers here and have NULL check in free_http_request(...)?
+		// free(headers);
 
 		if (recv_body_chunks(
 			client_fd, 
