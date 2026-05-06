@@ -117,7 +117,6 @@ int sanitize_path(
 	char *path
 ) {
 	int pstrl = strlen(path);
-	printf("START sanitize_path\n");
 
 	// -7 for "public/"
 	if (pstrl >= PATH_SIZE - 7) {
@@ -126,29 +125,14 @@ int sanitize_path(
 
 	if (strcmp(path, "/") == 0) {
 		strcpy(path, "index.html");
+		pstrl = strlen(path);
 	}
 
-	char *r;
+	// reading: https://owasp.org/www-community/attacks/Path_Traversal
 
-	r = memmem(path, pstrl, "/../", 3);
-
-	if (r != NULL) {
-		printf("/../: %s", r);
+	if (memmem(path, pstrl, "/..", 3) != NULL) {
+		return -1;
 	}
-
-	r = memmem(path, pstrl, "/./", 2);
-
-	if (r != NULL) {
-		printf("/./: %s", r);
-	}
-	
-	r = memmem(path, pstrl, "/../../", 6);
-
-	if (r != NULL) {
-		printf("/../../: %s", r);
-	}
-	
-	printf("END sanitize_path\n");
 	
 	return 0;
 }
@@ -163,7 +147,7 @@ int send_stream_file(
 	int response_len, byte_count, hex_header_len;
 	FILE *f;
 
-	if (sanitize_path(http_request->path) == -1) {
+	if (sanitize_path(http_request->path) < 0) {
 		return -1;
 	}
 
