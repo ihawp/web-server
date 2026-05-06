@@ -27,11 +27,12 @@ void free_http_response(
 void free_http_request(
 	HTTPRequest *hrq
 ) {
-	// freelima(hrq->headers);
-	
-	ht_destroy(hrq->headers);
+	// can be null when requests do not go past recv_header_chunks
+	if (hrq->headers != NULL) {
+		ht_destroy(hrq->headers);
+	}
+
 	free(hrq->header_storage);
-	
 	memset(hrq->body, 0, hrq->content_length);
 	free(hrq->body);
 	hrq->content_length = 0;
@@ -367,9 +368,6 @@ int handle_request(
 		if (body_length == http_request->content_length) {
 			printfid("Whole body found", *tid);
 		}
-
-		printf("BODY LENGTH: %ld\n", body_length);
-		printf("CONTENT LENGTH: %ld\n", http_request->content_length);
 
 		http_request->body = xmalloc(http_request->content_length + 1);
 		if (http_request->body == NULL) return -1;

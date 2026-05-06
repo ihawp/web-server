@@ -10,7 +10,8 @@
 - [epoll (w/usage example)](https://www.man7.org/linux/man-pages/man7/epoll.7.html)
 - [pthread](https://man7.org/linux/man-pages/man7/pthreads.7.html)
 - [Threads](https://cs341.cs.illinois.edu/coursebook/Threads)
-- Hash Table: [Repository](https://github.com/benhoyt/ht) & [Article](https://benhoyt.com/writings/hash-table-in-c/)
+- [Hash Table Data Structure](https://www.geeksforgeeks.org/dsa/hash-table-data-structure/)
+- Hash Table Implementation: [Repository](https://github.com/benhoyt/ht) & [Article](https://benhoyt.com/writings/hash-table-in-c/)
 
 ## About
 
