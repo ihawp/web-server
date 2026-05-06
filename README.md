@@ -12,6 +12,9 @@
 - [Threads](https://cs341.cs.illinois.edu/coursebook/Threads)
 - [Hash Table Data Structure](https://www.geeksforgeeks.org/dsa/hash-table-data-structure/)
 - Hash Table Implementation: [Repository](https://github.com/benhoyt/ht) & [Article](https://benhoyt.com/writings/hash-table-in-c/)
+- [Path Traversal](https://owasp.org/www-community/attacks/Path_Traversal)
+- [Hexadecimal](https://en.wikipedia.org/wiki/Hexadecimal)
+- [Bitwise Operations + etc](https://www.ewskills.com/embedded-c/bitwise-operations)
 
 ## About
 
@@ -48,3 +51,7 @@ GET requests attempt to dangerously find the file (risk of path traversal) in th
 ### StringView
 
 Adapted from Tsoding's video on why C strings are terrible. Watch that video [here](https://www.youtube.com/watch?v=y8PLpDgZc0E).
+
+## Security Considerations
+
+[Path traversal](https://owasp.org/www-community/attacks/Path_Traversal) is our first major security issue.

@@ -113,27 +113,47 @@ void send_json_response(
 	send(*client_fd, message, message_length, 0);
 }
 
+// Free LLM software generated this hex_digit function
+int hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// Free LLM software generated this decode_url function
+/*
+int decode_url(char *str) {
+    char *read = str;
+    char *write = str;
+
+    while (*read) {
+        if (*read == '%') {
+            int hi = hex_digit(read[1]);
+            int lo = hex_digit(read[2]);
+            if (hi < 0 || lo < 0) return -1; // malformed
+            *write++ = (char)(hi << 4 | lo);
+            read += 3;
+        } else if (*read == '+') {
+            *write++ = ' ';  // form encoding, optional
+            read++;
+        } else {
+            *write++ = *read++;
+        }
+    }
+
+    *write = '\0';
+    return 0;
+}
+*/
+
 int sanitize_path(
 	char *path
 ) {
-	int pstrl = strlen(path);
-
-	// -7 for "public/"
-	if (pstrl >= PATH_SIZE - 7) {
-		return -1;
-	}
-
-	if (strcmp(path, "/") == 0) {
-		strcpy(path, "index.html");
-		pstrl = strlen(path);
-	}
-
-	// reading: https://owasp.org/www-community/attacks/Path_Traversal
-
-	if (memmem(path, pstrl, "/..", 3) != NULL) {
-		return -1;
-	}
-	
+	if (strstr(path, "/..") != NULL) return -1;
+	if (strstr(path, " ") != NULL) return -2;
+	if (strstr(path, "//") != NULL) return -3;
+	if (path[0] != 0x2F) return -4; // probably not possible
 	return 0;
 }
 
@@ -147,7 +167,10 @@ int send_stream_file(
 	int response_len, byte_count, hex_header_len;
 	FILE *f;
 
-	if (sanitize_path(http_request->path) < 0) {
+	int spath = sanitize_path(http_request->path);
+
+	if (spath < 0) {
+		printf("sanitize_path: %d\n", spath);
 		return -1;
 	}
 
@@ -221,7 +244,7 @@ int extract_path_method_version(
 	StringView path = split_by_delim(&svh, 0x20);
 
 	if (path.count >= REQ_PATH_SIZE) {
-		return -1; // return a 414
+		return -414; // return a 414
 	}
 
 	SV_to_memory(req->method, REQ_METHOD_SIZE, &fsvh);
@@ -252,7 +275,7 @@ int find_headers(
 			count = (int)(s.string + i - line_start);
 
 			if (last_line == 0) {
-				if (extract_path_method_version(http_request, line_start, count) != 0) {
+				if (extract_path_method_version(http_request, line_start, count) < 0) {
 					break;
 				}
 			} else {
@@ -437,7 +460,7 @@ void *http_worker(
 	struct sockaddr_storage peer_addr = {0};
 	struct epoll_event ev, events[MAX_EVENTS] = {0};
 	socklen_t peer_addrlen = sizeof(struct sockaddr_storage);
-	int client_fd, n, ectl, result, fd;
+	int client_fd, n, ectl, epoll_result, fd, hr_result;
 	pid_t tid;
 	struct program_speed speed = {0};
 
@@ -448,10 +471,10 @@ void *http_worker(
 	printfid("Worker Started", tid);
 
 	for (;;) {
-		result = epoll_wait(wd->epc, events, MAX_EVENTS, -1);
-		if (result == -1) continue;
+		epoll_result = epoll_wait(wd->epc, events, MAX_EVENTS, -1);
+		if (epoll_result == -1) continue;
 
-		for (n = 0; n < result; ++n) {
+		for (n = 0; n < epoll_result; ++n) {
 			if (events[n].data.fd == wd->sfd) {
 				
 				client_fd = accept(wd->sfd, (struct sockaddr*) &peer_addr, (socklen_t*) &peer_addrlen);
@@ -483,8 +506,8 @@ void *http_worker(
 
 				ps_cap(&speed.start);
 				
-				int r = handle_request(&fd, &tid, &http_request, &http_response);
-				if (r < 0) {
+				hr_result = handle_request(&fd, &tid, &http_request, &http_response);
+				if (hr_result < 0) {
 					// have different types of errors to respond about
 					send_json_response(&fd, 400, "{\"error\": \"Failed to handle request\", \"success\": false}");
 				}

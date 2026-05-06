@@ -64,6 +64,10 @@ void trim_by_delim(
 	delim_from_right(sv, delim);
 }
 
+/*
+	Returns a StringView from start of string -> first instance of delimeter
+	Remaining string (after delimeter) is located in *stv
+*/
 StringView split_by_delim(	
 	StringView *stv,
 	char delim
