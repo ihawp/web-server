@@ -82,6 +82,7 @@ const char *http_status_str(
 		case 422: return "Unprocessable Entity";
 		case 429: return "Too Many Requests";
 		case 500: return "Internal Server Error";
+		case 501: return "Not Implemented";
 		case 502: return "Bad Gateway";
 		case 503: return "Service Unavailable";
 		case 504: return "Gateway Timeout";
@@ -181,7 +182,7 @@ FILE *open_file_from_path(
 
 	snprintf(public_path, PATH_SIZE, "public/%s", path);
 	f = fopen(public_path, "rb");
-	
+
 	if (f == NULL) {
 		return NULL;
 	}
@@ -391,11 +392,7 @@ int handle_get_request(
 	HTTPRequest *http_request,
 	HTTPResponse *http_response
 ) {
-	printf("HTTPREQ PATH: %s\n", http_request->path);
-
 	FILE *f = open_file_from_path(http_request->path);
-
-	printf("HTTPREQ PATH: %s\n", http_request->path);
 
 	if (f == NULL) {
 		printfid("Failed to open file GET", *tid);
@@ -502,7 +499,7 @@ int handle_request(
 
 		send_json_response(
 			client_fd, 
-			200, 
+			http_response->status, 
 			"{"
 				"\"success\": true,"
 				"\"message\": \"We recieved your data!\""
@@ -526,6 +523,9 @@ int handle_request(
 
 		return 0;
 	}
+
+	// method not implemented
+	http_response->status = 501;
 
 	return -1;
 }
@@ -602,7 +602,7 @@ void *http_worker(
 					// method as well, error for GET could be 404 page
 					send_json_response(
 						&fd, 
-						400, 
+						http_response.status, 
 						"{"
 							"\"error\": \"Failed to handle request\","
 							"\"success\": false"

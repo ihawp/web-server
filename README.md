@@ -51,7 +51,3 @@ GET requests attempt to dangerously find the file (risk of path traversal) in th
 ### StringView
 
 Adapted from Tsoding's video on why C strings are terrible. Watch that video [here](https://www.youtube.com/watch?v=y8PLpDgZc0E).
-
-## Security Considerations
-
-[Path traversal](https://owasp.org/www-community/attacks/Path_Traversal) is our first major security issue.

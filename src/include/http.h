@@ -43,11 +43,6 @@ void freeHTTPResponse(
 	HTTPResponse *htr
 );
 
-int add_header(
-	HTTPResponse *htr,
-	char *header 
-);
-
 char *file_to_content_type(
 	char *path
 );
@@ -66,6 +61,18 @@ FILE *open_file_from_path(
 	char *path
 );
 
+int hex_digit(
+	char c
+);
+
+int decode_url(
+	char *str
+);
+
+int sanitize_path(
+	char *path
+);
+
 int send_stream_file(
 	int *client_fd,
 	HTTPRequest *http_request,
@@ -79,9 +86,8 @@ int extract_path_method_version(
 	int count
 );
 
-int capture_headers(
-	int *client_fd,
-	HTTPRequest *req
+int find_headers(
+	HTTPRequest *http_request
 );
 
 char *recv_header_chunks(
@@ -96,10 +102,6 @@ int recv_body_chunks(
 	char *buffer,
 	size_t content_length,
 	size_t *body_length
-);
-
-int find_headers(
-	HTTPRequest *http_request
 );
 
 int handle_get_request(
