@@ -600,6 +600,11 @@ void *http_worker(
 				if (hr_result < 0) {
 					// have different types of errors to respond about, based on
 					// method as well, error for GET could be 404 page
+
+					// TODO: remove line below after setting 
+					// status where required throughout program
+					http_response.status = 500;
+
 					send_json_response(
 						&fd, 
 						http_response.status, 
