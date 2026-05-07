@@ -37,14 +37,28 @@ check_exists = [
         "url": "/../",
         "expected_result": False,
     },
+    """
     {
-        "url": "//", # should be failing with sanitize_path,
-                     # but perhaps the requests library is making 
-                     # the '//' -> '/' before the request is sent,
-                     # since on the server I see "HTTPREQ PATH: /" 
-                     # with logging
+        "url": "//", # library gets rid of second '/'
         "expected_result": False,
+        
+        To Test, run: 
+
+            curl localhost:3000// --path-as-is
+
+        Example:
+
+            $ curl localhost:3000// --path-as-is
+            {"error": "Failed to handle request","success": false}
+        
+        Server output should look like this:
+
+            [1894]: PATH //
+            [1894]: Failed to open file
+            [1894]: Failed to handle GET request
+            [1894]: Elapsed: 91519 ns (0.092 ms)
     },
+    """
     {
         "url": "//./../index.html",
         "expected_result": False,

@@ -168,6 +168,8 @@ FILE *open_file_from_path(
 	char public_path[PATH_SIZE];
 	FILE *f;
 
+	printf("PATH %s\n", path);
+
 	if (decode_url(path) < 0) {
 		return NULL;
 	}
