@@ -168,7 +168,7 @@ FILE *open_file_from_path(
 	char public_path[PATH_SIZE];
 	FILE *f;
 
-	printf("PATH %s\n", path);
+	printf("Path: %s\n", path);
 
 	if (decode_url(path) < 0) {
 		return NULL;
@@ -382,10 +382,16 @@ int recv_body_chunks(
 	size_t content_length,
 	size_t *body_length
 ) {
-	int status;
+	int status, last_byte_count = 0;
+
+	// can have MAX_RETRIES here.
+	// but if last_byte_count == body_length after a loop and status == 1
+	// then we should break
 
 	for (;;) {
-		if (*body_length >= content_length) break;
+		if (*body_length >= content_length) {
+			break;
+		}
 
 		status = recv_chunks(
 			client_fd,
@@ -394,6 +400,12 @@ int recv_body_chunks(
 						 // is incremented inside recv_chunks
 			&content_length
 		);
+
+		if (status == 1 && last_byte_count == *body_length) {
+			break;
+		}
+
+		last_byte_count = *body_length;
 
 		if (status == 1) continue;
 		if (status == -1 || status == 2) {
