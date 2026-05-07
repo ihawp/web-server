@@ -13,7 +13,7 @@ void ps_print_pit(
     struct timespec *point_in_time,
     int *tid
 ) {
-    printfid("Time: %ld ns (%.1f ms)", *tid, point_in_time->tv_sec, point_in_time->tv_nsec / 1e6);
+    printfid("Time: %ld ns (%.3f ms)", *tid, point_in_time->tv_sec, point_in_time->tv_nsec / 1e6);
 }
 
 void ps_print_elapsed(

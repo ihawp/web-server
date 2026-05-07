@@ -108,6 +108,23 @@ int recv_chunks(
 	return 0;
 }
 
+int send_wrapper(
+	int *client_fd,
+	char *buffer,
+	int buf_size
+) {
+	if (send(*client_fd, buffer, buf_size, MSG_NOSIGNAL) < 0) {
+		if (errno == EPIPE || errno == ENOTCONN) {
+			printf("EPIPE or ENOTCONN\n");
+			return -2;
+		}
+
+		return -1;
+	}
+
+	return 0;
+}
+
 int setnonblocking(
 	int fd
 ) {

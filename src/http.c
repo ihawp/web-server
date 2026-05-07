@@ -111,11 +111,13 @@ void send_json_response(
 		error_message
 	);
 
-	send(*client_fd, message, message_length, 0);
+	send_wrapper(client_fd, message, message_length);
 }
 
 // Free LLM software generated this hex_digit function
-int hex_digit(char c) {
+int hex_digit(
+	char c
+) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
@@ -123,7 +125,9 @@ int hex_digit(char c) {
 }
 
 // Free LLM software generated this decode_url function
-int decode_url(char *str) {
+int decode_url(
+	char *str
+) {
     char *read = str;
     char *write = str;
 
@@ -211,7 +215,7 @@ int send_stream_file(
 		http_status_str(http_response->status),
 		file_to_content_type(http_request->path)
 	);
-	send(*client_fd, response, response_len, 0);
+	send_wrapper(client_fd, response, response_len);
 
 	for (;;) {
 		// -2 for trailing \r\n
@@ -227,8 +231,8 @@ int send_stream_file(
 				byte_count
 			);
 
-			send(*client_fd, hex_header, hex_header_len, 0);
-			send(*client_fd, buffer, byte_count + 2, 0);
+			send_wrapper(client_fd, hex_header, hex_header_len);
+			send_wrapper(client_fd, buffer, byte_count + 2);
 		}
 
 		if (feof(f) != 0) break;
@@ -238,7 +242,7 @@ int send_stream_file(
 	}
 	
 	fclose(f);
-	send(*client_fd, "0\r\n\r\n", 5, 0);
+	send_wrapper(client_fd, "0\r\n\r\n", 5);
 	shutdown(*client_fd, SHUT_WR);
 	return 0;
 }
@@ -395,12 +399,12 @@ int handle_get_request(
 	FILE *f = open_file_from_path(http_request->path);
 
 	if (f == NULL) {
-		printfid("Failed to open file GET", *tid);
+		printfid("Failed to open file", *tid);
 		return -1;
 	}
 
 	if (send_stream_file(client_fd, http_request, http_response, f) == -1) {
-		printfid("Failed to send_stream_file", *tid);
+		printfid("Failed to stream file", *tid);
 		return -1;
 	}
 
@@ -530,6 +534,23 @@ int handle_request(
 	return -1;
 }
 
+/*
+int handle_request_failure(
+	HTTPRequest *http_request,
+	HTTPResponse *http_response
+) {
+
+	// use status and method
+
+	if (strcmp(http_request->method, "GET") == 0) {
+
+		// handle get request failure
+		printf("")
+	}
+
+}
+*/
+
 void *http_worker(
 	void *data
 ) {
@@ -600,10 +621,13 @@ void *http_worker(
 				if (hr_result < 0) {
 					// have different types of errors to respond about, based on
 					// method as well, error for GET could be 404 page
+					// something like handle_request_failure(...)
 
 					// TODO: remove line below after setting 
 					// status where required throughout program
 					http_response.status = 500;
+
+					// handle_request_failure(&http_request, &http_response);
 
 					send_json_response(
 						&fd, 

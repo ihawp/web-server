@@ -13,6 +13,12 @@ int recv_chunks(
 	size_t *buffer_size
 );
 
+int send_wrapper(
+	int *client_fd,
+	char *buffer,
+	int buf_size
+);
+
 int setnonblocking(
 	int fd
 );
