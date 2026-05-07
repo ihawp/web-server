@@ -215,7 +215,12 @@ int send_stream_file(
 		http_status_str(http_response->status),
 		file_to_content_type(http_request->path)
 	);
-	send_wrapper(client_fd, response, response_len);
+
+	// if send_wrapper fails we should exit with error in all cases
+	if (send_wrapper(client_fd, response, response_len) < 0) {
+		fclose(f);
+		return -1;
+	}
 
 	for (;;) {
 		// -2 for trailing \r\n
@@ -231,8 +236,13 @@ int send_stream_file(
 				byte_count
 			);
 
-			send_wrapper(client_fd, hex_header, hex_header_len);
-			send_wrapper(client_fd, buffer, byte_count + 2);
+			if (send_wrapper(client_fd, hex_header, hex_header_len) < 0 ||
+				send_wrapper(client_fd, buffer, byte_count + 2) < 0
+			) {
+				fclose(f);
+				return -1;
+			}
+			
 		}
 
 		if (feof(f) != 0) break;
@@ -242,7 +252,13 @@ int send_stream_file(
 	}
 	
 	fclose(f);
-	send_wrapper(client_fd, "0\r\n\r\n", 5);
+	
+	if (send_wrapper(client_fd, "0\r\n\r\n", 5) < 0) {
+		return -1;
+	}
+	
+	// don't call shutdown(...) if send_wrapper(...) fails
+	// client connection is already closed
 	shutdown(*client_fd, SHUT_WR);
 	return 0;
 }
