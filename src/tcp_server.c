@@ -115,7 +115,6 @@ int send_wrapper(
 ) {
 	if (send(*client_fd, buffer, buf_size, MSG_NOSIGNAL) < 0) {
 		if (errno == EPIPE || errno == ENOTCONN) {
-			printf("EPIPE or ENOTCONN\n");
 			return -2;
 		}
 
