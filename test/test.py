@@ -12,6 +12,29 @@ def test_file_found(url):
 
 server = "http://localhost:3000"
 
+"""
+    {
+        "url": "//", # library gets rid of second '/'
+        "expected_result": False,
+    },   
+
+    To Test, run: 
+
+        curl localhost:3000// --path-as-is
+
+    Example:
+
+        $ curl localhost:3000// --path-as-is
+        {"error": "Failed to handle request","success": false}
+        
+    Server output should look like this:
+
+        [1894]: PATH //
+        [1894]: Failed to open file
+        [1894]: Failed to handle GET request
+        [1894]: Elapsed: 91519 ns (0.092 ms)
+"""
+
 check_exists = [
     {
         "url": "/",
@@ -30,6 +53,10 @@ check_exists = [
         "expected_result": True,
     },
     {
+        "url": "/%20ndex.html",
+        "expected_result": False
+    },
+    {
         "url": "",
         "expected_result": True,
     },
@@ -37,28 +64,6 @@ check_exists = [
         "url": "/../",
         "expected_result": False,
     },
-    """
-    {
-        "url": "//", # library gets rid of second '/'
-        "expected_result": False,
-        
-        To Test, run: 
-
-            curl localhost:3000// --path-as-is
-
-        Example:
-
-            $ curl localhost:3000// --path-as-is
-            {"error": "Failed to handle request","success": false}
-        
-        Server output should look like this:
-
-            [1894]: PATH //
-            [1894]: Failed to open file
-            [1894]: Failed to handle GET request
-            [1894]: Elapsed: 91519 ns (0.092 ms)
-    },
-    """
     {
         "url": "//./../index.html",
         "expected_result": False,
