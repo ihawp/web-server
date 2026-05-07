@@ -122,7 +122,6 @@ int hex_digit(char c) {
 }
 
 // Free LLM software generated this decode_url function
-/*
 int decode_url(char *str) {
     char *read = str;
     char *write = str;
@@ -145,7 +144,6 @@ int decode_url(char *str) {
     *write = '\0';
     return 0;
 }
-*/
 
 int sanitize_path(
 	char *path
@@ -157,38 +155,48 @@ int sanitize_path(
 	return 0;
 }
 
-// This should accept an already open and tested fd, rather than have the 404 loop if f == null and what not.
+// If you don't pass this to send_stream_file,
+// make sure to close your file descriptor
+FILE *open_file_from_path(
+	char *path
+) {
+	char public_path[PATH_SIZE];
+	FILE *f;
+
+	if (decode_url(path) < 0) {
+		return NULL;
+	}
+
+	if (strcmp(path, "/") == 0) {
+		strcpy(path, "/index.html");
+	}
+
+	if (sanitize_path(path) < 0) {
+		return NULL;
+	}
+
+	// for safety you could split apart the path 
+	// and rebuild it to a hidden internal structure
+	// I will not do that yet
+
+	snprintf(public_path, PATH_SIZE, "public/%s", path);
+	f = fopen(public_path, "rb");
+	
+	if (f == NULL) {
+		return NULL;
+	}
+	
+	return f;
+}
+
 int send_stream_file(
 	int *client_fd,
 	HTTPRequest *http_request,
-	HTTPResponse *http_response
+	HTTPResponse *http_response,
+	FILE *f
 ) {
-	char buffer[CHUNK_SIZE], public_path[PATH_SIZE], response[CHUNK_SIZE], hex_header[16], *content_type, *fm;
+	char buffer[CHUNK_SIZE], response[CHUNK_SIZE], hex_header[16];
 	int response_len, byte_count, hex_header_len;
-	FILE *f;
-
-	int spath = sanitize_path(http_request->path);
-
-	if (spath < 0) {
-		printf("sanitize_path: %d\n", spath);
-		return -1;
-	}
-
-	snprintf(public_path, PATH_SIZE, "public/%s", http_request->path);
-
-	content_type = file_to_content_type(http_request->path);
-	
-	fm = "r"; // file mode
-	if (strncmp(content_type, "image", 5) == 0) { 
-		fm = "rb";
-	}
-
-	f = fopen(public_path, fm);
-	if (f == NULL) {
-		return -1;
-	}
-
-	http_response->status = 200;
 
 	response_len = snprintf(
 		response, 
@@ -200,7 +208,7 @@ int send_stream_file(
 		"\r\n",
 		http_response->status,
 		http_status_str(http_response->status),
-		content_type
+		file_to_content_type(http_request->path)
 	);
 	send(*client_fd, response, response_len, 0);
 
@@ -223,6 +231,9 @@ int send_stream_file(
 		}
 
 		if (feof(f) != 0) break;
+		if (ferror(f) != 0) { // could return -1 to indicate error and do seperate cleanup, but will just allow regular cleanup for now
+			break;
+		}
 	}
 	
 	fclose(f);
@@ -255,11 +266,10 @@ int extract_path_method_version(
 }
 
 int find_headers(
-	HTTPRequest *http_request,
-	char *headers
+	HTTPRequest *http_request
 ) {
 	http_request->headers = ht_create();
-	StringView s = sv(headers), key = {0}, value = {0};
+	StringView s = sv(http_request->header_storage), key = {0}, value = {0};
 	int last_line = 0, count;
 	char *line_start;
 
@@ -284,10 +294,8 @@ int find_headers(
 					.count = count
 				};
 				key = split_by_delim(&value, 0x3A);
-
-				if (key.count == 0) {
-					continue;
-				}
+				
+				if (key.count == 0) continue;
 
 				char keybuffer[key.count + 1], valuebuffer[value.count + 1];
 
@@ -320,9 +328,21 @@ char *recv_header_chunks(
 	char *mmp;
 
 	for (;;) {   
-		status = recv_chunks(client_fd, buffer, recv_count, &max_header_size);
-		if (status == -1 || status == 2) return NULL;
-		if (status == 1) continue;
+		status = recv_chunks(
+			client_fd, 
+			buffer, 
+			recv_count, 
+			&max_header_size
+		);
+
+		if (status == -1 || status == 2) {
+			return NULL;
+		}
+		
+		if (status == 1) {
+			continue;
+		}
+		
 		mmp = memmem(buffer, *recv_count, "\r\n\r\n", 4);
 		if (mmp != NULL) {
 			buffer[*recv_count] = '\0';
@@ -365,6 +385,72 @@ int recv_body_chunks(
 	return 0;
 }
 
+int handle_get_request(
+	int *client_fd,
+	pid_t *tid,
+	HTTPRequest *http_request,
+	HTTPResponse *http_response
+) {
+	printf("HTTPREQ PATH: %s\n", http_request->path);
+
+	FILE *f = open_file_from_path(http_request->path);
+
+	printf("HTTPREQ PATH: %s\n", http_request->path);
+
+	if (f == NULL) {
+		printfid("Failed to open file GET", *tid);
+		return -1;
+	}
+
+	if (send_stream_file(client_fd, http_request, http_response, f) == -1) {
+		printfid("Failed to send_stream_file", *tid);
+		return -1;
+	}
+
+	return 0;
+}
+
+int handle_post_request(
+	int *client_fd,
+	pid_t *tid,
+	HTTPRequest *http_request,
+	char *body_start,
+	size_t body_length
+) {
+	if (http_request->content_length >= MAX_CONTENT_LENGTH - CLIENT_BUF_SIZE - 1) {
+		return -1; // TODO: can start making custom error codes #define OVER_LIMIT 10 for preset error responses (in json or etc)
+	}
+
+	if (body_length == http_request->content_length) {
+		printfid("Whole body found", *tid);
+	}
+
+	http_request->body = xmalloc(http_request->content_length + 1);
+	if (http_request->body == NULL) {
+		printfid("Failed to allocated memory for body", *tid);
+		return -1;
+	}
+
+	// move the originally (potentially) captured body content
+	// into the proper body container: http_request->body
+	memmove(http_request->body, body_start, body_length);
+
+	// could free headers here and have NULL check in free_http_request(...)?
+	// free(headers);
+
+	if (recv_body_chunks(
+		client_fd, 
+		http_request->body, 
+		(size_t) http_request->content_length, 
+		&body_length
+	) == -1) {
+		printfid("Failed to recieve body chunks", *tid);
+		return -1;
+	}
+	
+	return 0;
+}
+
 int handle_request(
 	int *client_fd,
 	pid_t *tid, 
@@ -398,50 +484,43 @@ int handle_request(
 	body_start += 4; // move past \0\n\r\n to start of body content
 
 	http_request->header_storage = headers;
-
-	if (find_headers(http_request, headers) == 0) {
+	if (find_headers(http_request) == 0) {
 		return -1;
 	}
 
 	if (strcmp(http_request->method, "POST") == 0) {
-		if (http_request->content_length >= MAX_CONTENT_LENGTH - CLIENT_BUF_SIZE - 1) {
-			return -1; // TODO: can start making custom error codes #define OVER_LIMIT 10 for preset error responses (in json or etc)
-		}
-
-		if (body_length == http_request->content_length) {
-			printfid("Whole body found", *tid);
-		}
-
-		http_request->body = xmalloc(http_request->content_length + 1);
-		if (http_request->body == NULL) {
-			printfid("Failed to allocated memory for body", *tid);
-			return -1;
-		}
-
-		// move the originally (potentially) captured body content
-		// into the proper body container: http_request->body
-		memmove(http_request->body, body_start, body_length);
-
-		// could free headers here and have NULL check in free_http_request(...)?
-		// free(headers);
-
-		if (recv_body_chunks(
+		if (handle_post_request(
 			client_fd, 
-			http_request->body, 
-			(size_t) http_request->content_length, 
-			&body_length
-		) == -1) {
-			printfid("Failed to recieve body chunks", *tid);
+			tid, 
+			http_request, 
+			body_start, 
+			body_length
+		) < 0) {
+			printfid("Failed to handle POST request", *tid);
 			return -1;
 		}
 
-		send_json_response(client_fd, 200, "{\"success\": true, \"message\": \"We recieved your data!\"}");
-		
+		send_json_response(
+			client_fd, 
+			200, 
+			"{"
+				"\"success\": true,"
+				"\"message\": \"We recieved your data!\""
+			"}"
+		);
+	
 		return 0;
 	}
 
 	if (strcmp(http_request->method, "GET") == 0) {
-		if (send_stream_file(client_fd, http_request, http_response) == -1) {
+
+		if (handle_get_request(
+			client_fd, 
+			tid, 
+			http_request, 
+			http_response
+		) < 0) {
+			printfid("Failed to handle GET request", *tid);
 			return -1;
 		}
 
@@ -476,8 +555,15 @@ void *http_worker(
 
 		for (n = 0; n < epoll_result; ++n) {
 			if (events[n].data.fd == wd->sfd) {
+
+				// new client
 				
-				client_fd = accept(wd->sfd, (struct sockaddr*) &peer_addr, (socklen_t*) &peer_addrlen);
+				client_fd = accept(
+					wd->sfd, 
+					(struct sockaddr*) &peer_addr, 
+					(socklen_t*) &peer_addrlen
+				);
+
 				if (client_fd == -1) {
 					printfid("client_fd", tid);
 					continue;
@@ -499,17 +585,29 @@ void *http_worker(
 					exit(EXIT_FAILURE);
 				}
 			} else {
+
+				// client is ready
+
 				fd = events[n].data.fd;
 
 				memset(&http_request, 0, sizeof(http_request));
 				memset(&http_response, 0, sizeof(http_response));
+				http_response.status = 200;
 
 				ps_cap(&speed.start);
 				
 				hr_result = handle_request(&fd, &tid, &http_request, &http_response);
 				if (hr_result < 0) {
-					// have different types of errors to respond about
-					send_json_response(&fd, 400, "{\"error\": \"Failed to handle request\", \"success\": false}");
+					// have different types of errors to respond about, based on
+					// method as well, error for GET could be 404 page
+					send_json_response(
+						&fd, 
+						400, 
+						"{"
+							"\"error\": \"Failed to handle request\","
+							"\"success\": false"
+						"}"
+					);
 				}
 
 				ps_cap(&speed.end);

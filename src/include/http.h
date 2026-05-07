@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdio.h>
 #include <unistd.h>
 #include <string.h>
 #include "line_in_memory_array.h"
@@ -61,10 +62,15 @@ void send_json_response(
 	char *error_message	
 );
 
+FILE *open_file_from_path(
+	char *path
+);
+
 int send_stream_file(
 	int *client_fd,
 	HTTPRequest *http_request,
-	HTTPResponse *http_response
+	HTTPResponse *http_response,
+	FILE *f
 );
 
 int extract_path_method_version(
@@ -93,8 +99,22 @@ int recv_body_chunks(
 );
 
 int find_headers(
+	HTTPRequest *http_request
+);
+
+int handle_get_request(
+	int *client_fd,
+	pid_t *tid,
 	HTTPRequest *http_request,
-	char *headers
+	HTTPResponse *http_response
+);
+
+int handle_post_request(
+	int *client_fd,
+	pid_t *tid,
+	HTTPRequest *http_request,
+	char *body_start,
+	size_t body_length
 );
 
 int handle_request(
