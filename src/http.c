@@ -382,7 +382,7 @@ int recv_body_chunks(
 	size_t content_length,
 	size_t *body_length
 ) {
-	int status, last_byte_count = 0;
+	int status;
 
 	// can have MAX_RETRIES here.
 	// but if last_byte_count == body_length after a loop and status == 1
@@ -401,14 +401,9 @@ int recv_body_chunks(
 			&content_length
 		);
 
-		if (status == 1 && last_byte_count == *body_length) {
-			break;
-		}
-
-		last_byte_count = *body_length;
-
 		if (status == 1) continue;
 		if (status == -1 || status == 2) {
+			printf("BODY LENGTH: %ld\n", *body_length);
 			if (*body_length == 0) {
 				return -1;
 			}

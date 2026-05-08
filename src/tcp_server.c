@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <string.h>
 #include <netdb.h>
 #include <errno.h>
@@ -21,6 +22,9 @@ int tcp_server(
 	struct addrinfo *result = NULL, *rp = NULL;
 	int s, opt = 1, bs;
 	socklen_t opt_size = sizeof(opt);
+	struct timeval time = {0};
+	time.tv_sec = 0;
+	time.tv_usec = 50000;
 
 	memset(&h, 0, sizeof(h));
 	h.ai_flags = AI_PASSIVE; // int
@@ -48,6 +52,11 @@ int tcp_server(
 
 		if (setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &opt, opt_size) == -1) {
 			perror("setsockopt SO_REUSEADDR");
+			exit(EXIT_FAILURE);
+		}
+
+		if (setsockopt(sfd, SOL_SOCKET, SO_RCVTIMEO, &time, sizeof(time)) == -1) {
+			perror("setsockopt SO_RCVTIMEO");
 			exit(EXIT_FAILURE);
 		}
 
@@ -90,6 +99,8 @@ int recv_chunks(
 ) {
 	ssize_t recv_count;
 
+	// look at flags for recv
+	// current return values should remain intact
 	recv_count = recv(*client_fd, buffer + *total, *buffer_size - *total, 0);
 	
 	if (recv_count == 0) {
@@ -97,8 +108,49 @@ int recv_chunks(
 	}
 
 	if (recv_count < 0) {
+		printf("RECV_COUNT: %ld\n", recv_count);
+
+		if (errno == EAGAIN) {
+			printf("EAGAIN\n");
+		}
+
+		if (errno == EWOULDBLOCK) {
+			printf("EWOULDBLOCK\n");
+		}
+
+		// both of these are generally set together
+
+		/*
+		
+       EAGAIN or EWOULDBLOCK
+              The socket is marked nonblocking and the receive operation
+              would block, or a receive timeout had been set and the
+              timeout expired before data was received.  POSIX.1 allows
+              either error to be returned for this case, and does not
+              require these constants to have the same value, so a
+              portable application should check for both possibilities.
+
+		*/
+
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-			return 1;
+			// recv_count will always be -1 when there is error, but when RCVTIMEO happens
+			// recv_count returns -1 and sets errno to EAGAIN or EWOULDBLOCK
+			// which is the same thing that happens when more data is expected...
+
+			// adding the below 3 lines allows the RCVTIMEO to work*
+			// *: it doesnt work because it can never reach the return 1; case.
+
+			// we CANNOT just wait forever.
+			// so we need to exit when error, but
+			// RCVTIMEO and SOCKNONBLOCK both make 
+			// recv(...) return -1 and set errno
+			// to EAGAIN and EWOULDBLOCK
+			if (recv_count == -1) {
+				return -1;
+			}
+
+			printf("MORE COMING: %ld\n", recv_count);
+			return 1; // wait for more data...will there ever be data to wait for?
 		}
 		
 		return -1;
